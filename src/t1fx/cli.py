@@ -30,6 +30,15 @@ def main(argv=None):
     simulation = sub.add_parser("simulate", help="Compare policies on a validated scenario JSON")
     simulation.add_argument("--scenario", type=Path, required=True)
     simulation.add_argument("--budget", type=usd_minor, default=3_000_000)
+    for command in (demo, simulation):
+        command.add_argument("--timing-model", help="Empirical FX timing model ID; enables five-policy replay")
+        command.add_argument("--scenario-seed", type=int, default=42)
+        command.add_argument("--scenario-count", type=int, default=200)
+        command.add_argument("--common-shock-weight", type=float, default=0.5)
+    timing = sub.add_parser("train-timing", help="Freeze training-only empirical FX timing forecasts")
+    timing.add_argument("--dataset", required=True)
+    timing_validate = sub.add_parser("validate-timing", help="Verify a timing model and report test metrics")
+    timing_validate.add_argument("--model", required=True)
     fixture = sub.add_parser("write-fixture", help="Export the editable three-trade scenario")
     fixture.add_argument("--output", type=Path, required=True)
     validate = sub.add_parser("validate", help="Verify every artifact checksum for a run")
@@ -59,10 +68,30 @@ def main(argv=None):
         scenario = three_trade_scenario() if args.command == "demo" else Scenario.model_validate_json(
             args.scenario.read_text(),
         )
-        report = run_comparison(scenario, args.budget, store)
+        try:
+            report = run_comparison(
+                scenario, args.budget, store, timing_model_id=args.timing_model,
+                scenario_seed=args.scenario_seed, scenario_count=args.scenario_count,
+                common_shock_weight=args.common_shock_weight,
+            )
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            parser.error(str(exc))
         args.artifacts.mkdir(parents=True, exist_ok=True)
         (args.artifacts/"demo-summary.json").write_bytes(canonical_bytes(report))
         print(json.dumps(report, indent=2))
+    elif args.command in ("train-timing", "validate-timing"):
+        from t1fx.timing import load_model, train_timing
+
+        try:
+            if args.command == "train-timing":
+                output = train_timing(args.artifacts, args.dataset)
+            else:
+                model, metrics = load_model(args.artifacts, args.model)
+                output = {"timing_model_id": args.model, "status": "VALID",
+                          "training_count": model.training_count, "metrics": metrics}
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(output, indent=2))
     elif args.command == "write-fixture":
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(canonical_bytes(three_trade_scenario().model_dump(mode="json")))

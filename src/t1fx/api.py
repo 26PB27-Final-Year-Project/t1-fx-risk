@@ -211,6 +211,22 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                                                   for gap in allocation.pop("scenario_shortfalls_minor")]
         return {"run_id": run_id, "as_of": store.manifest(run_id)["decision_at"], "plan": plan}
 
+    @app.get("/api/v1/timing-models/{model_id}/health")
+    def timing_health(model_id: str):
+        from t1fx.timing import load_model
+
+        model, metrics = load_model(store.root, model_id)
+        return {"timing_model_id": model_id, "method": model.method,
+                "dataset_id": model.dataset_id, "trained_through": model.trained_through,
+                "training_count": model.training_count, "metrics": metrics}
+
+    @app.get("/api/v1/runs/{run_id}/timing-forecasts")
+    def timing_forecasts(run_id: str):
+        manifest = store.manifest(run_id)
+        if "timing_forecasts.json" not in manifest["files"]:
+            raise HTTPException(404, "This run has no FX timing forecasts.")
+        return {"run_id": run_id, "forecasts": store.read(run_id, "timing_forecasts.json")}
+
     @app.get("/api/v1/runs/{run_id}/metrics")
     def get_metrics(run_id: str):
         return {"run_id": run_id, "metrics": store.read(run_id, "metrics.json")}

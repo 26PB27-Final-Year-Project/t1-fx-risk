@@ -4,6 +4,7 @@ A synthetic research backend for simulating settlement failures, measuring FX fu
 
 - Deterministic settlement simulation with segregated cash, deadline outcomes, and late recovery.
 - Point-in-time snapshots, transparent rule scores, and budget-constrained funding optimization.
+- Empirical FX timing forecasts, correlated arrival scenarios, and five-policy matched replay.
 - Seeded datasets with chronological train/tuning/calibration/test splits, JSON/Parquet schemas, and integrity checks.
 - Calibrated XGBoost and logistic regression, Tree SHAP explanations, and model health reports.
 - Read-only FastAPI endpoints for runs, trades, funding, metrics, and model predictions.
@@ -101,6 +102,12 @@ uv run python -m t1fx.cli score-model --model MODEL_ID --dataset DATASET_ID --sp
 Models are saved under `artifacts/models/`, with frozen metrics, test predictions, training provenance, and a model card. Training reserves counterparties, tunes on the tuning partition, and calibrates on the calibration partition. Final reports include chronological and stress evaluations, reliability bins, and uncertainty across scenario days.
 
 Browse `/api/v1/models/MODEL_ID/health` for results. `/api/v1/runs/RUN_ID/model-predictions?model_id=MODEL_ID` scores reference-policy snapshots after the model's calibration period. The original three-trade demo predates that period and cannot be scored by a model trained on the smoke dataset. See [model usage](docs/models.md) for a compatible scenario replay.
+
+## Scenario funding
+
+Train an empirical timing model with `uv run python -m t1fx.cli train-timing --dataset DATASET_ID`.
+Pass its ID to `simulate --timing-model TIMING_MODEL_ID` to compare deterministic and scenario LP funding alongside three fixed funding policies. Use a dataset test scenario after training-label maturity.
+See [funding usage](docs/funding.md) for commands, forecast assumptions, and API endpoints.
 
 ## Scope
 

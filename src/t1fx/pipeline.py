@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from t1fx.domain import EventType, Scenario, whole
-from t1fx.funding import deterministic_requirements, fixed_percentage, optimize
+from t1fx.funding import deterministic_requirements, fixed_percentage, optimize, scenario_requirements
 from t1fx.simulator import simulate
 from t1fx.snapshots import build_snapshots, score_rules
 from t1fx.storage import RunStore, digest
@@ -22,7 +22,9 @@ def _code_hash() -> str:
     return hasher.hexdigest()
 
 
-def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore) -> dict:
+def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
+                   timing_model_id: str | None = None, scenario_seed: int = 42,
+                   scenario_count: int = 200, common_shock_weight: float = 0.5) -> dict:
     # Deliberately stop the reference replay at decision time before constructing plans.
     reference = simulate(scenario, until=scenario.decision_at)
     snapshots = build_snapshots(reference, scenario.decision_at)
@@ -37,8 +39,32 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore) -> di
     problem = deterministic_requirements(
         snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, {"USD": Decimal(1)},
     )
+    deterministic = problem
+    timing_forecasts = None
+    if timing_model_id is not None:
+        from t1fx.timing import forecast_arrivals, load_model
+
+        timing_model, _ = load_model(store.root, timing_model_id)
+        targets = {}
+        for snapshot in snapshots:
+            if snapshot.remaining_obligation_minor and snapshot.horizon_at > scenario.decision_at:
+                targets.setdefault(snapshot.bucket, []).append(snapshot.horizon_at)
+        draws, weights, timing_forecasts = forecast_arrivals(
+            timing_model, visible_fx, credited_ids, scenario.decision_at, targets,
+            scenario_seed, scenario_count, common_shock_weight,
+        )
+        timing_forecasts["timing_model_id"] = timing_model_id
+        problem = scenario_requirements(
+            snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor,
+            {"USD": Decimal(1)}, draws, weights,
+        )
     plans = [fixed_percentage(problem, fraction) for fraction in (Decimal(0), Decimal("0.5"), Decimal(1))]
+    problems = [problem] * len(plans)
+    if timing_model_id is not None:
+        plans.append(optimize(deterministic, policy_id="deterministic-lp-v1"))
+        problems.append(deterministic)
     plans.append(optimize(problem))
+    problems.append(problem)
     predictions = [score_rules(snapshot).model_dump(mode="json") for snapshot in snapshots]
     environment = {
         "python": platform.python_version(),
@@ -46,7 +72,7 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore) -> di
                          for name in ("pydantic", "numpy", "scipy", "fastapi")},
     }
     reports = []
-    for plan in plans:
+    for plan, plan_problem in zip(plans, problems, strict=True):
         funding = {allocation.bucket: allocation.incremental_reserve_minor for allocation in plan.allocations}
         result = simulate(scenario, funding=funding)
         late_cost = sum((outcome.late_cost for outcome in result.outcomes), Decimal(0))
@@ -72,11 +98,13 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore) -> di
             "postings.json": [p.model_dump(mode="json") for p in result.ledger.postings.values()],
             "snapshots.json": [s.model_dump(mode="json") for s in snapshots],
             "predictions.json": predictions,
-            "funding_problem.json": problem.model_dump(mode="json"),
+            "funding_problem.json": plan_problem.model_dump(mode="json"),
             "funding_plan.json": plan.model_dump(mode="json"),
             "outcomes.json": [outcome.model_dump(mode="json") for outcome in result.outcomes],
             "metrics.json": metrics,
         }
+        if timing_forecasts is not None:
+            artifacts["timing_forecasts.json"] = timing_forecasts
         metadata = {
             "scenario_id": scenario.scenario_id,
             "scenario_hash": digest(scenario.model_dump(mode="json")),
@@ -87,6 +115,9 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore) -> di
             "artifact_format": "canonical_json_v1", "calendar_profile_ids": sorted({t.market_profile_id for t in scenario.trades}),
             "model_id": "rules-v1", "assumption": scenario.assumption,
         }
+        if timing_model_id is not None:
+            metadata["timing_model_id"] = timing_model_id
+            metadata["scenario_seed"] = scenario_seed
         run_id = store.publish(artifacts, metadata)
         reports.append({"run_id": run_id, "policy_id": plan.policy_id, **metrics})
     return {"scenario_id": scenario.scenario_id, "runs": reports}

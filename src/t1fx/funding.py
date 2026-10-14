@@ -152,13 +152,13 @@ def fixed_percentage(problem: FundingProblem, fraction: Decimal) -> FundingPlan:
     return _make_plan(problem, amounts, f"fixed-{fraction.normalize()}", "BASELINE")
 
 
-def optimize(problem: FundingProblem) -> FundingPlan:
+def optimize(problem: FundingProblem, *, policy_id: str = "scenario-lp-v1") -> FundingPlan:
     import numpy as np
     from scipy.optimize import linprog
 
     n, scenarios = len(problem.requirements), len(problem.probabilities)
     if not n:
-        return _make_plan(problem, [], "scenario-lp-v1", "OPTIMAL", marginal=0.0)
+        return _make_plan(problem, [], policy_id, "OPTIMAL", marginal=0.0)
     # x[0:n], then one shortfall per bucket/scenario. Amounts in whole currency units.
     objective = np.zeros(n + n*scenarios)
     constraints = np.zeros((n*scenarios+1, len(objective)))
@@ -192,13 +192,14 @@ def optimize(problem: FundingProblem) -> FundingPlan:
             if abs(scaled-nearest) < Decimal("0.000001"):
                 scaled = nearest
             amounts.append(min(_capacity(requirement), int(scaled.to_integral_value(rounding=ROUND_FLOOR))))
-        return _make_plan(problem, amounts, "scenario-lp-v1", "OPTIMAL",
+        return _make_plan(problem, amounts, policy_id, "OPTIMAL",
                           marginal=max(0.0, -float(result.ineqlin.marginals[-1])))
     except (ValueError, RuntimeError) as exc:
         fallback = fixed_percentage(problem, Decimal("0.5"))
         return _make_plan(
             problem, [a.incremental_reserve_minor for a in fallback.allocations],
-            "fallback-fixed-0.5", "FALLBACK", reason=str(exc),
+            ("fallback-fixed-0.5" if policy_id == "scenario-lp-v1"
+             else f"{policy_id}-fallback-fixed-0.5"), "FALLBACK", reason=str(exc),
         )
 
 
@@ -241,3 +242,36 @@ def deterministic_requirements(
             shortfall_coefficient=Decimal("0.01"), driver_trade_ids=tuple(s.trade_id for s in rows),
         ))
     return FundingProblem(budget_minor=budget_minor, requirements=tuple(requirements))
+
+
+def scenario_requirements(
+    snapshots, visible_fx, credited_leg_ids, as_of, budget_minor, base_rates,
+    arrivals, probabilities,
+) -> FundingProblem:
+    """Compute each path's peak deficit, allocating each shared FX receipt once."""
+    # Validate the same observation boundary as the deterministic builder.
+    baseline = deterministic_requirements(
+        snapshots, visible_fx, credited_leg_ids, as_of, budget_minor, base_rates,
+    )
+    if not arrivals or len(arrivals) != len(probabilities):
+        raise ValueError("One weight is required for each arrival scenario")
+    pending = {leg.fx_leg_id for leg in visible_fx if leg.fx_leg_id not in credited_leg_ids}
+    paths = []
+    for draw in arrivals:
+        if set(draw) != pending:
+            raise ValueError("Arrival scenario must contain every uncredited visible leg exactly once")
+        if any(t is not None and (t.tzinfo is None or t <= as_of) for t in draw.values()):
+            raise ValueError("Forecast arrivals must follow decision time")
+        legs = tuple(leg.model_copy(update={"expected_credit_at": draw[leg.fx_leg_id]})
+                     for leg in visible_fx if leg.fx_leg_id in draw and draw[leg.fx_leg_id] is not None)
+        paths.append(deterministic_requirements(
+            snapshots, legs, credited_leg_ids, as_of, budget_minor, base_rates,
+        ))
+    requirements = []
+    for index, requirement in enumerate(baseline.requirements):
+        amounts = tuple(path.requirements[index].scenario_amounts_minor[0] for path in paths)
+        requirements.append(requirement.model_copy(update={
+            "scenario_amounts_minor": amounts, "cap_minor": max(amounts),
+        }))
+    return FundingProblem(budget_minor=budget_minor, probabilities=probabilities,
+                          requirements=tuple(requirements))

@@ -24,6 +24,17 @@
 - Immutable dataset releases contain canonical JSON, optional explicit-schema Parquet, replayable scenarios, configuration, provenance, checksums, and a data card.
 - CLI commands generate, validate, and export datasets. `make smoke` generates 1,000 trades with two snapshots each.
 
+## Risk-model milestone
+
+- One versioned feature function serves training and inference: USD notional, observable cash coverage, lifecycle state, time to cutoffs, and dated counterparty failure history. Feature names, units, and categorical mappings are persisted.
+- Logistic regression and XGBoost compare unweighted and class-balanced fitting using trade-normalized snapshot weights. A fixed candidate grid is selected by tuning log loss.
+- Monotonic sigmoid calibration uses only the separate calibration cohort. Models, preprocessing, calibration, and thresholds are frozen before final evaluation.
+- Counterparty holdouts are excluded from all fitting and historical features. A predeclared stress family is evaluated after freezing.
+- Reports include PR-AUC (average precision), ROC-AUC, Brier score, log loss, reliability bins, capacity-based precision/recall, missed exposure, decision horizons, and scenario-day bootstrap intervals.
+- Native XGBoost Tree SHAP contributions explain raw log-odds; calibrated probabilities remain separate. Additivity is checked in evaluation and inference.
+- Atomic JSON model bundles include checksums and a frozen fitted-artifact hash. Inference checks feature compatibility, XGBoost major version, funding policy, and calibration maturity. Missing/incompatible models return `MODEL_UNAVAILABLE`.
+- CLI training, validation, and scoring; API model listing, health reports, and run-scoped reference-policy predictions. See [model usage](models.md).
+
 ## Current simplifications
 
 1. The demo uses three purchases, USD settlement, three segregated cash pools, and an externally funded EUR/USD receipt. The standalone LP supports multiple currencies; the comparison pipeline deliberately rejects non-USD portfolios until valuation rates are supplied explicitly.
@@ -34,14 +45,16 @@
 6. The requirement builder uses contractual deadline times and observable expected FX credits. It is conservative about overdue/unobserved receipts. The generic LP accepts weighted scenarios, but the demo supplies one scenario; a learned FX timing distribution is not yet implemented.
 7. The LP objective is an assumed planning surrogate. Realised bridge/late/route costs are independently computed in replay and are not interchangeable with that objective.
 8. Costs use the configured annual/daily rates and elapsed fractional days. The fallback fee is in each trade currency's minor units. These are assumptions, not jurisdictional penalty schedules.
-9. Snapshot reconstruction currently covers immediate reservation consumption in this simulator. Persistent, externally created reservations and historical counterparty aggregates require additional observable records before they can be included.
+9. Snapshot reconstruction currently covers immediate reservation consumption in this simulator. Persistent external reservations require additional observable records. Model history uses only dated training-cohort deadline outcomes; historical delay quantiles are not implemented.
 10. Simulation runs use JSON. Dataset releases support JSON and optional Parquet; auto mode reports JSON-only output explicitly when PyArrow is unavailable. PyArrow 23.0.1 passed local round-trip, export, and 1,000-trade release validation. CI installs the extra and exercises both formats.
 11. The API is read-only and binds to loopback. Authentication, durable jobs, funding recomputation, and the React dashboard are not implemented. Interactive `/docs` describes the backend, not the planned dashboard.
-12. Rule scores are hand-written heuristics. XGBoost, logistic regression, calibration, SHAP, Optuna, and E1–E6 research results have not yet been implemented or claimed.
+12. Rule scores remain hand-written heuristics. Risk models are calibrated on synthetic data; the 1,000-trade smoke release has only two final test scenario-days. Its results do not establish real-world calibration. Tuning uses a fixed grid, not Optuna. Learned FX timing and the full E1–E6 study remain future work.
 
 ## Validation recorded during development
 
-The test suite also checks seeded generation, temporal partition boundaries, truth separation, settlement-window recovery, table contracts, dataset integrity, and Parquet round trips. All 56 tests passed locally with PyArrow 23.0.1.
+The test suite also checks seeded generation, temporal partition boundaries, truth separation, settlement-window recovery, table contracts, dataset integrity, and Parquet round trips. The dataset milestone passed 56 tests locally with PyArrow 23.0.1. Risk-model checks additionally cover dated history, held-out fitting boundaries, calibration, SHAP additivity, reproducibility, incompatible bundles, API inference, and CLI loading.
+
+The complete suite now passes 67 tests locally, including model training, repeated-bundle identity, and API/replay prediction parity.
 
 The original engine tests check the fixture, cash conservation/idempotency, invalid financial inputs, deadline boundary ordering, late recovery, SSI/funding separation, observation leakage, currency conversion, scenario probabilities, LP hand solutions, capacity/budget constraints, solver fallback, immutable artifact integrity, repeatability, CLI flow, API pagination/errors, and decimal-string response amounts.
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from t1fx.domain import CURRENCY_EXPONENT, Currency, Event, Outcome, RulePrediction, whole
 from t1fx.storage import ArtifactError, RunStore
+from t1fx.models import ModelStore, ModelUnavailable, RiskModel
 
 
 class TradeView(BaseModel):
@@ -51,6 +52,7 @@ class TradeDetail(BaseModel):
 
 def create_app(artifact_root: Path | None = None) -> FastAPI:
     store = RunStore(artifact_root or Path(os.environ.get("T1FX_ARTIFACT_ROOT", "artifacts")))
+    models = ModelStore(store.root)
     app = FastAPI(title="T+1 FX Risk Engine", version="0.1.0",
                   description="Synthetic research engine. Rule scores are not probabilities.")
 
@@ -74,6 +76,10 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
     @app.exception_handler(ArtifactError)
     async def invalid_artifact(request, exc):
         return error_response(request, 409, "ARTIFACT_INVALID", str(exc))
+
+    @app.exception_handler(ModelUnavailable)
+    async def unavailable_model(request, exc):
+        return error_response(request, 409, "MODEL_UNAVAILABLE", str(exc))
 
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
@@ -99,6 +105,31 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
     @app.get("/api/v1/runs")
     def list_runs():
         return {"items": store.list_runs()}
+
+    @app.get("/api/v1/models")
+    def list_models():
+        return {"items": models.list_models()}
+
+    @app.get("/api/v1/models/{model_id}/health")
+    def model_health(model_id: str):
+        model = RiskModel(store.root, model_id)
+        artifacts = model.artifacts
+        return {"model_id": model_id, "status": "AVAILABLE", "reference_policy_id": "fixed-0",
+                "training": artifacts["training_manifest.json"], "metrics": artifacts["metrics.json"],
+                "thresholds": artifacts["thresholds.json"], "model_card": artifacts["model_card.md"]}
+
+    @app.get("/api/v1/runs/{run_id}/model-predictions")
+    def model_predictions(run_id: str, model_id: str, trade_id: str | None = None):
+        manifest = store.validate(run_id)
+        rows = store.read(run_id, "snapshots.json")
+        rows = [row | {"reference_policy_id": manifest["reference_policy_id"]} for row in rows
+                if trade_id is None or row["trade_id"] == trade_id]
+        if trade_id is not None and not rows:
+            raise HTTPException(404, "Trade not found at this decision time.")
+        trades = {trade["trade_id"]: trade for trade in store.read(run_id, "scenario.json")["trades"]}
+        return {"run_id": run_id, "model_id": model_id, "as_of": manifest["decision_at"],
+                "reference_policy_id": manifest["reference_policy_id"],
+                "items": RiskModel(store.root, model_id).predict(rows, trades)}
 
     @app.get("/api/v1/runs/{run_id}")
     def get_run(run_id: str):

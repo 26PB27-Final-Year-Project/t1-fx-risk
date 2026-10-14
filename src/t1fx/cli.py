@@ -43,6 +43,14 @@ def main(argv=None):
     dataset_validate.add_argument("--dataset", required=True)
     parquet = sub.add_parser("export-parquet", help="Publish a Parquet copy of a JSON dataset")
     parquet.add_argument("--dataset", required=True)
+    train = sub.add_parser("train", help="Fit and evaluate a frozen settlement-risk model bundle")
+    train.add_argument("--dataset", required=True)
+    model_validate = sub.add_parser("validate-model", help="Verify and load a saved model bundle")
+    model_validate.add_argument("--model", required=True)
+    score = sub.add_parser("score-model", help="Score reference-policy snapshots in a dataset partition")
+    score.add_argument("--model", required=True)
+    score.add_argument("--dataset", required=True)
+    score.add_argument("--split", choices=("train", "tuning", "calibration", "test"), default="test")
     serve = sub.add_parser("serve", help="Serve the read-only API and interactive OpenAPI docs")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
@@ -88,6 +96,31 @@ def main(argv=None):
             "parquet_status": manifest["parquet_status"],
             "summary": manifest["summary"],
         }, indent=2))
+    elif args.command in ("train", "validate-model", "score-model"):
+        try:
+            from t1fx.models import RiskModel
+
+            if args.command == "train":
+                from t1fx.training import train_model
+
+                output = train_model(args.artifacts, args.dataset)
+            elif args.command == "validate-model":
+                model = RiskModel(args.artifacts, args.model)
+                output = {"model_id": args.model, "status": "VALID",
+                          "dataset_id": model.artifacts["training_manifest.json"]["dataset_id"]}
+            else:
+                from t1fx.datasets import validate_dataset
+
+                manifest = validate_dataset(args.artifacts, args.dataset)
+                directory = args.artifacts/"datasets"/args.dataset
+                trades = {row["trade_id"]: row for row in json.loads(
+                    (directory/manifest["tables"]["trades"]["json"]).read_text())}
+                rows = json.loads((directory/manifest["tables"]["snapshots"]["json"]).read_text())
+                model = RiskModel(args.artifacts, args.model)
+                output = model.predict([row for row in rows if row["split"] == args.split], trades)
+        except (ImportError, ValueError, RuntimeError, FileNotFoundError) as exc:
+            parser.error(f"Risk model unavailable: {exc}")
+        print(json.dumps(output, indent=2))
     elif args.command == "serve":
         import uvicorn
 

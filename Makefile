@@ -1,10 +1,10 @@
 PYTHON ?= .venv/bin/python
 DATASET_FORMAT ?= auto
 
-.PHONY: setup test demo smoke serve fixture check
+.PHONY: setup test demo smoke train serve fixture check
 
 setup:
-	uv sync --extra parquet
+	uv sync --extra parquet --extra ml
 
 test:
 	$(PYTHON) -m pytest
@@ -14,6 +14,9 @@ demo:
 
 smoke:
 	$(PYTHON) -m t1fx.cli generate --config configs/generation/smoke.json --format $(DATASET_FORMAT)
+
+train:
+	$(PYTHON) -m t1fx.cli train --dataset $(DATASET)
 
 serve:
 	$(PYTHON) -m t1fx.cli serve

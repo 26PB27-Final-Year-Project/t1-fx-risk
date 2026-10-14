@@ -3,7 +3,9 @@
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, model_validator
+from typing import Literal
+
+from pydantic import Field, field_serializer, model_validator
 
 from t1fx.domain import Contract
 
@@ -18,7 +20,7 @@ class CalendarProfile(Contract):
     settlement_time: time = time(16)
     settlement_lag: int = Field(default=1, ge=0)
     early_closes: dict[date, time] = Field(default_factory=dict)
-    classification: str = "assumption"
+    classification: Literal["assumption", "scenario_override", "sourced"] = "assumption"
     source_url: str | None = None
 
     @model_validator(mode="after")
@@ -28,7 +30,17 @@ class CalendarProfile(Contract):
             raise ValueError("Invalid calendar coverage")
         if self.affirmation_time.tzinfo or self.settlement_time.tzinfo:
             raise ValueError("Cutoff clock times must be local, without an attached timezone")
+        if self.classification == "sourced" and not self.source_url:
+            raise ValueError("A sourced calendar needs its source URL")
+        if any(not self.valid_from <= day <= self.valid_to for day in self.holidays | self.early_closes.keys()):
+            raise ValueError("Calendar overrides must lie within profile coverage")
+        if any(clock.tzinfo for clock in self.early_closes.values()):
+            raise ValueError("Early-close clock times must be local and timezone-naive")
         return self
+
+    @field_serializer("holidays", when_used="json")
+    def stable_holidays(self, value):
+        return [day.isoformat() for day in sorted(value)]
 
     def require_coverage(self, day: date) -> None:
         if not self.valid_from <= day <= self.valid_to:

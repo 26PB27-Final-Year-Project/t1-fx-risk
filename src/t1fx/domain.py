@@ -147,6 +147,18 @@ class CostProfile(Contract):
     classification: Literal["assumption"] = "assumption"
 
 
+class SettlementWindow(Contract):
+    market_profile_id: str
+    opens_at: AwareDatetime
+    closes_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def valid_window(self):
+        if self.opens_at >= self.closes_at:
+            raise ValueError("Settlement window must open before it closes")
+        return self
+
+
 class Scenario(Contract):
     scenario_id: str
     starts_at: AwareDatetime
@@ -157,6 +169,7 @@ class Scenario(Contract):
     opening_cash: tuple[OpeningCash, ...]
     fx_legs: tuple[FXLeg, ...] = ()
     funding_sources: tuple[FundingSource, ...] = ()
+    settlement_windows: tuple[SettlementWindow, ...] = ()
     fallback_delay_minutes: Annotated[int, Field(ge=0)] = 30
     costs: CostProfile = CostProfile()
     assumption: str = "Synthetic cash-equity scenario; securities assumed available."
@@ -182,6 +195,19 @@ class Scenario(Contract):
                 raise ValueError("Trade belongs to a different scenario")
             if not self.starts_at <= trade.executed_at <= trade.contractual_deadline_at <= self.ends_at:
                 raise ValueError("Trade outside scenario horizon")
+        last_close = {}
+        for window in sorted(self.settlement_windows, key=lambda w: w.opens_at):
+            if not self.starts_at <= window.opens_at < window.closes_at <= self.ends_at:
+                raise ValueError("Settlement window outside scenario horizon")
+            if window.market_profile_id in last_close and window.opens_at <= last_close[window.market_profile_id]:
+                raise ValueError("Settlement windows overlap")
+            last_close[window.market_profile_id] = window.closes_at
+        if self.settlement_windows:
+            for trade in self.trades:
+                if not any(w.market_profile_id == trade.market_profile_id
+                           and w.opens_at <= trade.contractual_deadline_at <= w.closes_at
+                           for w in self.settlement_windows):
+                    raise ValueError("Trade deadline is outside its settlement windows")
         committed: dict[str, int] = {}
         for leg in self.fx_legs:
             source = sources.get(leg.funding_source_id)

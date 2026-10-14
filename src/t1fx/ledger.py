@@ -65,9 +65,9 @@ class Ledger:
         return True
 
     def assert_conserved(self) -> None:
+        expected = dict(self.opening)
+        for posting in self.postings.values():
+            expected[posting.bucket] = expected.get(posting.bucket, 0) + posting.amount_minor
         for bucket in set(self.opening) | set(self.balances):
-            expected = self.opening.get(bucket, 0) + sum(
-                p.amount_minor for p in self.postings.values() if p.bucket == bucket
-            )
-            if expected != self.balances[bucket] or self.free(bucket) < 0:
+            if expected.get(bucket, 0) != self.balances[bucket] or self.free(bucket) < 0:
                 raise AssertionError(f"Cash invariant failed for {bucket.key}")

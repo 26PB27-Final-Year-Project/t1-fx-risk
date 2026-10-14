@@ -18,12 +18,18 @@ def build_snapshots(result: SimulationResult, as_of: datetime) -> tuple[Snapshot
         if posting.effective_at <= as_of and posting.available_at <= as_of
     ]
     ranks = {"EXECUTED": 0, "ALLOCATED": 1, "CONFIRMED": 2, "AFFIRMED": 3, "INSTRUCTED": 4}
+    by_trade = {}
+    for event in visible:
+        by_trade.setdefault(event.trade_id, []).append(event)
+    observed_balances = dict(result.ledger.opening)
+    for posting in postings:
+        observed_balances[posting.bucket] = observed_balances.get(posting.bucket, 0)+posting.amount_minor
     snapshots = []
     for trade in result.scenario.trades:
         if trade.executed_at > as_of or trade.available_at > as_of:
             continue
         events = sorted(
-            (event for event in visible if event.trade_id == trade.trade_id),
+            by_trade.get(trade.trade_id, ()),
             key=lambda event: (event.event_time, event.sequence, event.event_id),
         )
         stage, ssi, settled = "EXECUTED", "UNKNOWN", False
@@ -37,9 +43,7 @@ def build_snapshots(result: SimulationResult, as_of: datetime) -> tuple[Snapshot
                 ssi = "MISMATCH"
             elif event.event_type == EventType.SETTLED:
                 settled = True
-        observed_cash = result.ledger.opening.get(trade.bucket, 0) + sum(
-            posting.amount_minor for posting in postings if posting.bucket == trade.bucket
-        )
+        observed_cash = observed_balances.get(trade.bucket, 0)
         snapshots.append(Snapshot(
             trade_id=trade.trade_id, as_of=as_of, horizon_at=trade.contractual_deadline_at,
             bucket=trade.bucket,

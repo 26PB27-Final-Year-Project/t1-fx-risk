@@ -54,27 +54,41 @@ def simulate(
     # phase 0: prerequisites/credits; 1: funding; 2: settlement; 3: deadline.
     queue: list[tuple] = []
     serial = 0
+    scheduled_attempts: set[tuple[datetime, Bucket]] = set()
+    by_bucket: dict[Bucket, list] = {}
+    for trade in sorted(scenario.trades, key=lambda t: (
+        t.contractual_deadline_at, t.executed_at, t.trade_id,
+    )):
+        by_bucket.setdefault(trade.bucket, []).append(trade)
+    first_open = {bucket: min(t.settlement_open_at for t in rows)
+                  for bucket, rows in by_bucket.items()}
 
     def push(at, phase, kind, payload, sequence=0, identifier=""):
         nonlocal serial
         serial += 1
         heapq.heappush(queue, (at, phase, sequence, identifier, serial, kind, payload))
 
+    def attempt(at, bucket):
+        key = (at, bucket)
+        if bucket in first_open and first_open[bucket] <= at <= end and key not in scheduled_attempts:
+            scheduled_attempts.add(key)
+            push(at, 2, "attempt", bucket)
+
     for event in scenario.events:
         push(event.event_time, 0, "event", event, event.sequence, event.event_id)
     for trade in scenario.trades:
-        push(trade.settlement_open_at, 2, "attempt", None)
+        attempt(trade.settlement_open_at, trade.bucket)
         push(trade.contractual_deadline_at, 3, "deadline", trade.trade_id)
+    for window in scenario.settlement_windows:
+        for bucket, rows in by_bucket.items():
+            if any(trade.market_profile_id == window.market_profile_id for trade in rows):
+                attempt(window.opens_at, bucket)
     if funding:
         push(scenario.decision_at, 1, "fund", None)
     push(end, 4, "end", None)
     outstanding: dict[Bucket, int] = {}
     bridge_costs: dict[Bucket, Decimal] = {}
     last_at = scenario.starts_at
-    ordered_trades = sorted(
-        scenario.trades,
-        key=lambda t: (t.contractual_deadline_at, t.executed_at, t.trade_id),
-    )
 
     def emit(kind: EventType, trade_id: str, at: datetime, known_at: datetime | None = None):
         recorded.append(Event(
@@ -91,6 +105,13 @@ def simulate(
         if ledger.free(trade.bucket) < trade.settlement_amount_minor:
             reasons.append("INSUFFICIENT_FUNDING")
         return tuple(reasons)
+
+    def route_open(trade, at):
+        return not scenario.settlement_windows or any(
+            window.market_profile_id == trade.market_profile_id
+            and window.opens_at <= at <= window.closes_at
+            for window in scenario.settlement_windows
+        )
 
     while queue:
         at, phase, _, _, _, kind, payload = heapq.heappop(queue)
@@ -131,12 +152,13 @@ def simulate(
                         state.used_fallback = at > trade.affirmation_cutoff_at
                         delay = scenario.fallback_delay_minutes if state.used_fallback else 0
                         push(at + timedelta(minutes=delay), 0, "instruct", event)
-            push(at, 2, "attempt", None)
+            bucket = legs[event.fx_leg_id].bucket if event.fx_leg_id else trades[event.trade_id].bucket
+            attempt(at, bucket)
         elif kind == "instruct":
             state = states[payload.trade_id]
             state.instruction = "INSTRUCTED"
             emit(EventType.INSTRUCTED, payload.trade_id, at, max(at, payload.available_at))
-            push(at, 2, "attempt", None)
+            attempt(at, trades[payload.trade_id].bucket)
         elif kind == "fund":
             for bucket, amount in sorted(funding.items(), key=lambda item: item[0].key):
                 if amount:
@@ -145,11 +167,13 @@ def simulate(
                         effective_at=at, available_at=at, kind="BRIDGE_DRAW", source_ref="policy",
                     ))
                     outstanding[bucket] = amount
-            push(at, 2, "attempt", None)
+                    attempt(at, bucket)
         elif kind == "attempt":
-            for trade in ordered_trades:
+            scheduled_attempts.discard((at, payload))
+            for trade in by_bucket[payload]:
                 state = states[trade.trade_id]
-                if state.settled_at or at < trade.settlement_open_at or blockers(trade, state):
+                if (state.settled_at or at < trade.settlement_open_at
+                        or not route_open(trade, at) or blockers(trade, state)):
                     continue
                 ledger.reserve(trade.trade_id, trade.bucket, trade.settlement_amount_minor)
                 ledger.settle(trade.trade_id, at)
@@ -170,7 +194,8 @@ def simulate(
                         effective_at=at, available_at=at, kind="BRIDGE_REPAYMENT", source_ref="policy",
                     ))
                     outstanding[bucket] -= repayment
-        ledger.assert_conserved()
+
+    ledger.assert_conserved()
 
     outcomes = []
     for trade in scenario.trades:

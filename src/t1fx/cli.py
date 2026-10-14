@@ -34,6 +34,15 @@ def main(argv=None):
     fixture.add_argument("--output", type=Path, required=True)
     validate = sub.add_parser("validate", help="Verify every artifact checksum for a run")
     validate.add_argument("--run", required=True)
+    generate = sub.add_parser("generate", help="Build a seeded, partitioned research dataset")
+    generate.add_argument("--config", type=Path, default=Path("configs/generation/smoke.json"))
+    generate.add_argument("--seed", type=int)
+    generate.add_argument("--trades", type=int)
+    generate.add_argument("--format", choices=("auto", "json", "both"), default="auto")
+    dataset_validate = sub.add_parser("validate-dataset", help="Validate a released dataset")
+    dataset_validate.add_argument("--dataset", required=True)
+    parquet = sub.add_parser("export-parquet", help="Publish a Parquet copy of a JSON dataset")
+    parquet.add_argument("--dataset", required=True)
     serve = sub.add_parser("serve", help="Serve the read-only API and interactive OpenAPI docs")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
@@ -53,6 +62,32 @@ def main(argv=None):
     elif args.command == "validate":
         manifest = store.validate(args.run)
         print(f"Validated {args.run}: {len(manifest['files'])} artifacts")
+    elif args.command in ("generate", "validate-dataset", "export-parquet"):
+        from t1fx.datasets import export_parquet, generate_release, validate_dataset
+        from t1fx.generation import GenerationConfig, load_config
+
+        try:
+            if args.command == "generate":
+                config_data = load_config(args.config).model_dump()
+                if args.seed is not None:
+                    config_data["seed"] = args.seed
+                if args.trades is not None:
+                    config_data["trade_count"] = args.trades
+                config = GenerationConfig.model_validate(config_data)
+                manifest = generate_release(config, args.artifacts, args.format)
+            elif args.command == "validate-dataset":
+                manifest = validate_dataset(args.artifacts, args.dataset)
+            else:
+                manifest = export_parquet(args.artifacts, args.dataset)
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({
+            "dataset_id": manifest["dataset_id"],
+            "directory": str(args.artifacts/"datasets"/manifest["dataset_id"]),
+            "formats": manifest["identity"]["formats"],
+            "parquet_status": manifest["parquet_status"],
+            "summary": manifest["summary"],
+        }, indent=2))
     elif args.command == "serve":
         import uvicorn
 

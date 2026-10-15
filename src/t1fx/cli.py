@@ -60,7 +60,9 @@ def main(argv=None):
     score.add_argument("--model", required=True)
     score.add_argument("--dataset", required=True)
     score.add_argument("--split", choices=("train", "tuning", "calibration", "test"), default="test")
-    serve = sub.add_parser("serve", help="Serve the read-only API and interactive OpenAPI docs")
+    worker = sub.add_parser("worker", help="Process durable funding jobs; run alongside the API")
+    worker.add_argument("--once", action="store_true", help="Process at most one job then exit")
+    serve = sub.add_parser("serve", help="Serve the local dashboard, API, and OpenAPI docs")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
     store = RunStore(args.artifacts)
@@ -150,6 +152,13 @@ def main(argv=None):
         except (ImportError, ValueError, RuntimeError, FileNotFoundError) as exc:
             parser.error(f"Risk model unavailable: {exc}")
         print(json.dumps(output, indent=2))
+    elif args.command == "worker":
+        from t1fx.jobs import run_worker
+
+        try:
+            run_worker(args.artifacts, once=args.once)
+        except KeyboardInterrupt:
+            pass
     elif args.command == "serve":
         import uvicorn
 

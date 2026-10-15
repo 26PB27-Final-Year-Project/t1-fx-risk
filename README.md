@@ -7,7 +7,8 @@ A synthetic research backend for simulating settlement failures, measuring FX fu
 - Empirical FX timing forecasts, correlated arrival scenarios, and five-policy matched replay.
 - Seeded datasets with chronological train/tuning/calibration/test splits, JSON/Parquet schemas, and integrity checks.
 - Calibrated XGBoost and logistic regression, Tree SHAP explanations, and model health reports.
-- Read-only FastAPI endpoints for runs, trades, funding, metrics, and model predictions.
+- React dashboard for trades, funding, policy comparisons, and model health.
+- Run-scoped FastAPI endpoints and durable SQLite jobs for funding recomputation.
 
 ## Setup
 
@@ -65,6 +66,21 @@ The commands respectively run the checks, compare four funding policies on the r
 
 Equivalent Make shortcuts: `make setup`, `make test`, `make demo`, `make smoke DATASET_FORMAT=both`, and `make serve`. Train a model with `make train DATASET=DATASET_ID`.
 
+## Dashboard and worker
+
+With Node.js 22.12+ and npm installed:
+
+```sh
+npm ci --prefix frontend
+npm run build --prefix frontend
+uv run python -m t1fx.cli demo
+uv run python -m t1fx.cli serve
+# In another terminal:
+uv run python -m t1fx.cli worker
+```
+
+Open <http://127.0.0.1:8000/>. The dashboard explores stored trades, funding, matched policy comparisons, and model health. Funding recomputation runs in the separate worker and survives API restarts. See [application usage](docs/application.md) for job behavior, development, and browser checks.
+
 ## Datasets and scenarios
 
 ```sh
@@ -111,6 +127,6 @@ See [funding usage](docs/funding.md) for commands, forecast assumptions, and API
 
 ## Scope
 
-Calendars, FX conventions, and costs are synthetic assumptions. Generated settlement is USD-only; securities are assumed available. Rule scores are uncalibrated. The engine does not execute payments or FX trades. ML probabilities are calibrated on synthetic data under the fixed-0 funding policy; they do not estimate risk after a new funding intervention. Durable jobs, authentication, and the dashboard are not implemented.
+Calendars, FX conventions, and costs are synthetic assumptions. Generated settlement is USD-only; securities are assumed available. Rule scores are uncalibrated. The engine does not execute payments or FX trades. ML probabilities are calibrated on synthetic data under the fixed-0 funding policy; they do not estimate risk after a new funding intervention. The dashboard and worker are for local use; shared-host authentication and a live replay clock are not implemented.
 
 See [architecture](docs/architecture.md) and [implementation status](docs/implementation-status.md) for design details and limitations.

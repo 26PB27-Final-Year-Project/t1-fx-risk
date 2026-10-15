@@ -71,6 +71,13 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         "dependencies": {name: importlib.metadata.version(name)
                          for name in ("pydantic", "numpy", "scipy", "fastapi")},
     }
+    code_hash = _code_hash()
+    comparison_id = "comparison-" + digest({
+        "scenario": scenario.model_dump(mode="json"), "budget_minor": budget_minor,
+        "code_hash": code_hash, "environment": environment,
+        "plans": [plan.model_dump(mode="json") for plan in plans],
+        "timing_forecasts": timing_forecasts,
+    })[:20]
     reports = []
     for plan, plan_problem in zip(plans, problems, strict=True):
         funding = {allocation.bucket: allocation.incremental_reserve_minor for allocation in plan.allocations}
@@ -78,8 +85,14 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         late_cost = sum((outcome.late_cost for outcome in result.outcomes), Decimal(0))
         route_cost = sum((outcome.route_fee for outcome in result.outcomes), Decimal(0))
         bridge_cost = sum(result.bridge_costs.values(), Decimal(0))
+        failed_ids = {outcome.trade_id for outcome in result.outcomes
+                      if outcome.missed_contractual_deadline is True}
         metrics = {
             "currency": "USD", "trade_count": len(scenario.trades),
+            "failed_notional": str(whole(sum(
+                trade.settlement_amount_minor for trade in scenario.trades
+                if trade.trade_id in failed_ids
+            ), "USD")),
             "failed_count": sum(outcome.missed_contractual_deadline is True for outcome in result.outcomes),
             "recovered_late_count": sum(outcome.recovered_late for outcome in result.outcomes),
             "censored_count": sum(outcome.censored for outcome in result.outcomes),
@@ -108,7 +121,7 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         metadata = {
             "scenario_id": scenario.scenario_id,
             "scenario_hash": digest(scenario.model_dump(mode="json")),
-            "code_hash": _code_hash(), "environment": environment,
+            "code_hash": code_hash, "environment": environment, "comparison_id": comparison_id,
             "policy_id": plan.policy_id, "reference_policy_id": "fixed-0",
             "decision_at": scenario.decision_at.isoformat(),
             "result_as_of": result.as_of.isoformat(), "settlement_priority": "deadline_execution_id_skip_unfunded",

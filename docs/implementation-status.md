@@ -44,6 +44,15 @@
 - Persisted seeds, arrivals, model identity, exact weights, requirements, sampling diagnostics, chronological test Brier/reliability reports, CLI training/replay, and read-only API inspection.
 - This implements the architecture's empirical fallback. A separately calibrated timing classifier and fitted dependence remain extensions. See [funding usage](funding.md).
 
+## Application milestone (Gate G)
+
+- Local React/TypeScript dashboard with trade inspection, funding, matched scenarios, and model health; explicit loading, empty, model-unavailable and request-error states.
+- Currency/state/score filters, model probability sorting, observed FX tracks, SHAP factors, separate decision/outcome clocks, and decimal-string amounts.
+- SQLite job registry with transactional claims, normalized idempotency keys, renewable leases, bounded restart recovery, owner fencing, cancellation and durable result/error references.
+- Separate CLI worker runs funding comparisons and validates immutable artifacts before completing a job. Same-origin mutation checks and loopback host restrictions protect the local API.
+- Comparison identities isolate budgets and forecast settings; browser job references survive reloads and stale responses are ignored.
+- Frontend build and Playwright acceptance workflow. See [application usage](application.md).
+
 ## Current simplifications
 
 1. The demo uses three purchases, USD settlement, three segregated cash pools, and an externally funded EUR/USD receipt. The standalone LP supports multiple currencies; the comparison pipeline deliberately rejects non-USD portfolios until valuation rates are supplied explicitly.
@@ -56,19 +65,19 @@
 8. Costs use the configured annual/daily rates and elapsed fractional days. The fallback fee is in each trade currency's minor units. These are assumptions, not jurisdictional penalty schedules.
 9. Snapshot reconstruction currently covers immediate reservation consumption in this simulator. Persistent external reservations require additional observable records. Model history uses only dated training-cohort deadline outcomes; historical delay quantiles are not implemented.
 10. Simulation runs use JSON. Dataset releases support JSON and optional Parquet; auto mode reports JSON-only output explicitly when PyArrow is unavailable. PyArrow 23.0.1 passed local round-trip, export, and 1,000-trade release validation. CI installs the extra and exercises both formats.
-11. The API is read-only and binds to loopback. Authentication, durable jobs, funding recomputation, and the React dashboard are not implemented. Interactive `/docs` describes the backend, not the planned dashboard.
+11. The API, React dashboard and durable worker run locally. Shared-host authentication, distributed jobs and a live replay clock remain unimplemented. Cancellation fences job state but does not preempt a running numerical solver.
 12. Rule scores remain hand-written heuristics. Risk models are calibrated on synthetic data; the 1,000-trade smoke release has only two final test scenario-days. Its results do not establish real-world calibration. Tuning uses a fixed grid, not Optuna. A richer FX timing classifier and the full E1–E6 study remain future work.
 
 ## Validation recorded during development
 
 The test suite also checks seeded generation, temporal partition boundaries, truth separation, settlement-window recovery, table contracts, dataset integrity, and Parquet round trips. The dataset milestone passed 56 tests locally with PyArrow 23.0.1. Risk-model checks additionally cover dated history, held-out fitting boundaries, calibration, SHAP additivity, reproducibility, incompatible bundles, API inference, and CLI loading.
 
-Before Gate F, the complete suite passed 67 tests locally, including model training, repeated-bundle identity, and API/replay prediction parity. The complete suite now passes 73 tests locally. Gate F adds six tests covering survival conditioning, maturity, shared shocks, empirical marginals, exact scenario weights, shared receipts, deadline equality, artifact integrity, CLI training/replay, API inspection, reproducibility, and a matched case where uncertainty changes reserves and realised failures.
+Before Gate F, the complete suite passed 67 tests locally, including model training, repeated-bundle identity, and API/replay prediction parity. Gate F passed 73 tests locally. Gate F adds six tests covering survival conditioning, maturity, shared shocks, empirical marginals, exact scenario weights, shared receipts, deadline equality, artifact integrity, CLI training/replay, API inspection, reproducibility, and a matched case where uncertainty changes reserves and realised failures.
 
 The original engine tests check the fixture, cash conservation/idempotency, invalid financial inputs, deadline boundary ordering, late recovery, SSI/funding separation, observation leakage, currency conversion, scenario probabilities, LP hand solutions, capacity/budget constraints, solver fallback, immutable artifact integrity, repeatability, CLI flow, API pagination/errors, and decimal-string response amounts.
 
-The local runtime is Python 3.14.7 with dependency versions pinned in `requirements-py314.lock`. Source compilation also succeeds under Python 3.11. A FastAPI/Starlette dependency warning currently recommends `httpx2` for test clients; the installed `httpx` compatibility path works and all API tests pass. No production reliance is placed on the test client.
+Gate F used Python 3.14.7 with dependency versions recorded in `requirements-py314.lock`. Gate G passed all 79 backend tests on Python 3.11.16, the TypeScript/Vite production build, and four Chromium Playwright checks. These cover the complete recompute flow, browser reload recovery, API error recovery, mobile navigation and stale trade-detail responses. A FastAPI/Starlette dependency warning currently recommends `httpx2` for test clients; the installed `httpx` compatibility path works and all API tests pass. No production reliance is placed on the test client.
 
-CI configuration is supplied but has not been run remotely. Python 3.11 dependency integration and universal dependency locking remain unverified because package-index DNS is unavailable here.
+CI configuration includes Python engine checks and the dashboard build/browser flow, but has not been run remotely. Frontend dependencies are pinned by `frontend/package-lock.json`; universal Python dependency locking remains future work.
 
-The API was exercised through FastAPI's in-process test client. A live launch reached application startup successfully, but this execution sandbox denied binding to `127.0.0.1` (`Operation not permitted`). No server is left running. Start `make serve` from a regular local terminal to use the endpoints in a browser.
+The API is covered by FastAPI test-client checks. The application milestone also uses a temporary live loopback server and Chromium for browser acceptance; restricted sandboxes require permission to bind and launch the browser. Start `make serve` and `make worker` to use the dashboard locally.

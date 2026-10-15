@@ -25,6 +25,9 @@ dev = ["pytest>=8,<10", "httpx>=0.27,<1", "ruff>=0.9,<1"]
 [project.scripts]
 t1fx = "t1fx.cli:main"
 
+[tool.hatch.build]
+artifacts = ["src/t1fx/dashboard/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/t1fx"]
 

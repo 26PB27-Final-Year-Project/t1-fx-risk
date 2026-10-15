@@ -1,7 +1,7 @@
 PYTHON ?= .venv/bin/python
 DATASET_FORMAT ?= auto
 
-.PHONY: setup test demo smoke train serve fixture check
+.PHONY: setup test demo smoke train serve worker dashboard browser-test fixture check
 
 setup:
 	uv sync --extra parquet --extra ml
@@ -26,3 +26,13 @@ fixture:
 
 check: test
 	$(PYTHON) -m compileall -q src
+
+worker:
+	$(PYTHON) -m t1fx.cli worker
+
+dashboard:
+	npm ci --prefix frontend
+	npm run build --prefix frontend
+
+browser-test:
+	npm run test:e2e --prefix frontend

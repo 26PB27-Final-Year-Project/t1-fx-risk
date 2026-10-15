@@ -44,6 +44,7 @@ test('mobile layout retains navigation and table access', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', {name: 'T-FX-GAP', exact: true})).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole('button', {name: 'Toggle Sidebar'}).click();
   await page.getByRole('button', {name: 'Funding', exact: true}).click();
   await expect(page.getByLabel('Liquidity limit (USD)')).toBeVisible();
 });
@@ -120,14 +121,14 @@ for (const theme of ['light', 'dark']) {
           return parents.reduce((bg, p) => blend(rgba(getComputedStyle(p).backgroundColor), bg), [255, 255, 255, 1]);
         };
         const failures = [];
-        const slots = 'button,input,native-select,label,table-head,table-cell,card-title,card-description,badge';
+        const slots = 'button,input,select-trigger,label,table-head,table-cell,card-title,card-description,badge';
         for (const el of document.querySelectorAll(slots.split(',').map(s => `[data-slot="${s}"]`).join(',') + ',.page-description,.context,footer')) {
           if (!el.getClientRects().length || el.matches(':disabled') || (!el.textContent.trim() && !el.matches('input'))) continue;
           const style = getComputedStyle(el), bg = background(el), fg = blend(rgba(style.color), bg);
           const a = luminance(fg), b = luminance(bg), ratio = (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
           const slot = el.getAttribute('data-slot');
           if (ratio < 4.5) failures.push(`${slot || el.tagName}: contrast ${ratio.toFixed(2)} ${el.textContent.slice(0, 45)}`);
-          if (['button', 'input', 'native-select', 'label', 'table-head', 'table-cell', 'card-title'].includes(slot) && style.fontSize !== '14px') failures.push(`${slot}: font ${style.fontSize}`);
+          if (['button', 'input', 'select-trigger', 'label', 'table-head', 'table-cell', 'card-title'].includes(slot) && style.fontSize !== '14px') failures.push(`${slot}: font ${style.fontSize}`);
           if (['card-description', 'badge'].includes(slot) && style.fontSize !== '12px') failures.push(`${slot}: helper font ${style.fontSize}`);
         }
         return failures;
@@ -138,3 +139,72 @@ for (const theme of ['light', 'dark']) {
     await page.screenshot({path: testInfo.outputPath(`${theme}-shadcn.png`), fullPage: true});
   });
 }
+
+
+test('custom dropdowns support keyboard selection, disabled options and clearing filters', async ({page}) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', {name:'T-FX-GAP', exact:true})).toBeVisible();
+  const sort = page.getByRole('combobox', {name:'Sort', exact:true});
+  await sort.click();
+  await expect(page.getByRole('option', {name:'Fail probability', exact:true})).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Escape');
+  const state = page.getByRole('combobox', {name:'Instruction state', exact:true});
+  await state.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.getByRole('option', {name:'CONFIRMED', exact:true}).click();
+  await expect(state).toContainText('CONFIRMED');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await state.click();
+  await page.getByRole('option', {name:'All states', exact:true}).click();
+  await expect(state).toContainText('All states');
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+});
+
+test('sidebar icon loads and navigation stays within expanded, collapsed and mobile sidebars', async ({page}) => {
+  await page.goto('/');
+  const icon = page.getByRole('img', {name:'T+1 Settlement app icon'});
+  await expect(icon).toBeVisible();
+  await expect.poll(() => icon.evaluate(img => img.complete && img.naturalWidth > 0)).toBe(true);
+  const favicon = await page.locator('link[rel="icon"]').getAttribute('href');
+  expect((await page.request.get(favicon)).status()).toBe(200);
+  await page.getByRole('button', {name:'Toggle Sidebar'}).click();
+  await expect(page.locator('[data-slot="sidebar"][data-state="collapsed"]')).toBeVisible();
+  for (const name of ['Trades','Funding','Scenarios','Model health']) {
+    const button = page.getByRole('button', {name,exact:true});
+    await expect(button).toBeVisible();
+    expect(await button.evaluate(el => {const side=el.closest('[data-slot="sidebar-container"]').getBoundingClientRect();const box=el.getBoundingClientRect();return box.left>=side.left && box.right<=side.right;})).toBe(true);
+  }
+  await expect(icon).toBeVisible();
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button', {name:'Toggle Sidebar'}).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(icon).toBeVisible();
+  await expect.poll(() => icon.evaluate(img => img.complete && img.naturalWidth > 0)).toBe(true);
+  await page.getByRole('button', {name:'Funding',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByLabel('Liquidity limit (USD)')).toBeVisible();
+});
+
+
+test('all workspace pages fit the remaining width when the sidebar expands', async ({page}) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', {name:'T-FX-GAP',exact:true})).toBeVisible();
+  for (const width of [1280,1024]) {
+    await page.setViewportSize({width,height:900});
+    for (const expanded of [true,false,true]) {
+      const sidebar = page.locator('[data-slot="sidebar"][data-state]');
+      if ((await sidebar.getAttribute('data-state') === 'expanded') !== expanded) await page.getByRole('button',{name:'Toggle Sidebar'}).click();
+      await expect(sidebar).toHaveAttribute('data-state',expanded?'expanded':'collapsed');
+      for (const name of ['Trades','Funding','Scenarios','Model health']) {
+        await page.getByRole('button',{name,exact:true}).click();
+        if (name==='Scenarios') await expect(page.locator('tbody tr')).toHaveCount(4);
+        await expect.poll(()=>page.evaluate(()=>{
+          const main=document.querySelector('[data-slot="sidebar-inset"]').getBoundingClientRect();
+          const content=document.querySelector('.page-content').getBoundingClientRect();
+          return document.documentElement.scrollWidth<=innerWidth && main.right<=innerWidth+1 && content.left>=main.left-1 && content.right<=main.right+1;
+        })).toBe(true);
+      }
+    }
+  }
+});

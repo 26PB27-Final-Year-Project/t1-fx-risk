@@ -99,6 +99,7 @@ class RunStore:
 
     def list_runs(self) -> list[dict]:
         runs = []
-        for path in sorted((self.root/"runs").glob("run-*/manifest.json")):
+        paths = (self.root/"runs").glob("run-*/manifest.json")
+        for path in sorted(paths, key=lambda path: (-path.stat().st_mtime_ns, path.parent.name)):
             runs.append(self.manifest(path.parent.name))
         return runs

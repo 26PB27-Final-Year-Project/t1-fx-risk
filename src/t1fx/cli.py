@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from t1fx.domain import Scenario
-from t1fx.fixtures import three_trade_scenario
+from t1fx.fixtures import demo_scenario, three_trade_scenario
 from t1fx.pipeline import run_comparison
 from t1fx.storage import RunStore, canonical_bytes
 
@@ -25,8 +25,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="t1fx", description="T+1 FX settlement research engine")
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts"))
     sub = parser.add_subparsers(dest="command", required=True)
-    demo = sub.add_parser("demo", help="Replay the three-trade fixture with four funding policies")
+    demo = sub.add_parser("demo", help="Replay 50 synthetic trades with four funding policies")
     demo.add_argument("--budget", type=usd_minor, default=3_000_000, help="USD amount; default 30000")
+    demo.add_argument("--trades", type=int, default=50, help="Synthetic trades; 3–100 (default 50)")
+    demo.add_argument("--seed", type=int, default=42, help="Reproducible demo seed (default 42)")
     simulation = sub.add_parser("simulate", help="Compare policies on a validated scenario JSON")
     simulation.add_argument("--scenario", type=Path, required=True)
     simulation.add_argument("--budget", type=usd_minor, default=3_000_000)
@@ -67,10 +69,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     store = RunStore(args.artifacts)
     if args.command in ("demo", "simulate"):
-        scenario = three_trade_scenario() if args.command == "demo" else Scenario.model_validate_json(
-            args.scenario.read_text(),
-        )
         try:
+            scenario = demo_scenario(args.trades, args.seed) if args.command == "demo" else Scenario.model_validate_json(
+                args.scenario.read_text(),
+            )
             report = run_comparison(
                 scenario, args.budget, store, timing_model_id=args.timing_model,
                 scenario_seed=args.scenario_seed, scenario_count=args.scenario_count,

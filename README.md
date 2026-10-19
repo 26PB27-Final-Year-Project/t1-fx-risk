@@ -1,132 +1,74 @@
-# T+1 Settlement-Fail & FX Funding Risk Engine
+# T+1 Settlement and FX Funding Risk Engine
 
-A synthetic research backend for simulating settlement failures, measuring FX funding gaps, and comparing funding policies.
+A local research application for exploring why securities trades miss settlement deadlines and how funding decisions affect those outcomes. It creates synthetic trades, simulates their settlement and FX cash flows, estimates observable risk, and compares funding policies. A dashboard makes the results easy to inspect.
 
-- Deterministic settlement simulation with segregated cash, deadline outcomes, and late recovery.
-- Point-in-time snapshots, transparent rule scores, and budget-constrained funding optimization.
-- Empirical FX timing forecasts, correlated arrival scenarios, and five-policy matched replay.
-- Seeded datasets with chronological train/tuning/calibration/test splits, JSON/Parquet schemas, and integrity checks.
-- Calibrated XGBoost and logistic regression, Tree SHAP explanations, and model health reports.
-- React dashboard for trades, funding, policy comparisons, and model health.
-- Run-scoped FastAPI endpoints and durable SQLite jobs for funding recomputation.
+**This is a research demo.** Its data, market rules, and costs are synthetic. It does not move money, book FX, or send settlement instructions.
 
-## Setup
+## What you can do
 
-Requires Git and Python 3.11–3.14. Install [uv](https://docs.astral.sh/uv/getting-started/installation/); it selects the project's Python 3.11 version and downloads it if needed.
+- **Review trades:** see funding gaps, rule scores, deadlines, instruction status, and later outcomes.
+- **Compare funding policies:** allocate a shared liquidity budget and inspect failures and realised costs across matched runs.
+- **Study models:** generate larger datasets, train risk and FX timing models, and inspect their evaluation reports.
+- **Reproduce results:** use seeded inputs, immutable artifacts, and a separate worker for funding jobs.
 
-macOS or Linux (Terminal):
+## Run the demo
 
-```sh
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Windows (PowerShell):
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Open a new terminal, clone the project, and install its runtime, Parquet, and machine-learning dependencies:
+You need Python 3.11–3.14, [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 22.12+, and npm. On macOS, install XGBoost's OpenMP runtime with `brew install libomp`.
 
 ```sh
 git clone https://github.com/26PB27-Final-Year-Project/t1-fx-risk.git
 cd t1-fx-risk
 uv sync --extra parquet --extra ml
-```
-
-`uv sync` creates the project virtual environment and installs the development tools used by the test suite. `.python-version` selects Python 3.11 for consistent environments. On macOS, install XGBoost's OpenMP runtime before running the app:
-
-```sh
-brew install libomp
-```
-
-If you prefer pip, create and activate a virtual environment, then install the project and extras:
-
-```sh
-python -m venv .venv
-# macOS/Linux
-source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e '.[parquet,ml]'
-python -m pip install pytest httpx
-```
-
-Use `uv run` below on all three operating systems. `make` examples are also provided for systems with Make installed.
-
-## Run
-
-```sh
-uv run pytest
-uv run python -m t1fx.cli demo
-uv run python -m t1fx.cli generate --config configs/generation/smoke.json --format both
-uv run python -m t1fx.cli serve
-```
-
-The commands respectively run the checks, compare four funding policies on the reference scenario, generate 1,000 trades and 2,000 snapshots, and start the API. The generator prints the dataset ID; save it for the dataset and model commands below. API documentation is at <http://127.0.0.1:8000/docs>.
-
-Equivalent Make shortcuts: `make setup`, `make test`, `make demo`, `make smoke DATASET_FORMAT=both`, and `make serve`. Train a model with `make train DATASET=DATASET_ID`.
-
-## Dashboard and worker
-
-With Node.js 22.12+ and npm installed:
-
-```sh
 npm ci --prefix frontend
 npm run build --prefix frontend
 uv run python -m t1fx.cli demo
+```
+
+`demo` publishes four funding-policy runs for **50 reproducible synthetic trades**. To choose another sample, use `demo --trades 40 --seed 7`. The small three-trade fixture in `configs/scenarios/three-trades.json` remains available for hand-checking the engine.
+
+Start the app and worker in separate terminals:
+
+```sh
 uv run python -m t1fx.cli serve
-# In another terminal:
+```
+
+```sh
 uv run python -m t1fx.cli worker
 ```
 
-Open <http://127.0.0.1:8000/>. The dashboard explores stored trades, funding, matched policy comparisons, and model health. Funding recomputation runs in the separate worker and survives API restarts. See [application usage](docs/application.md) for job behavior, development, and browser checks.
+Open **<http://127.0.0.1:8000/>** for the dashboard or **<http://127.0.0.1:8000/docs>** for the API. If a saved URL still opens an older run, return to the root URL or select `demo-50-s42-v1` in **Simulation run**.
 
-## Datasets and scenarios
+The dashboard has four views: **Trades** for individual cases, **Funding** for reserves and budget changes, **Scenarios** for policy comparisons, and **Model health** for trained-model reports. Recomputing funding requires the worker process.
+
+## Generate research data
+
+The demo is intended for exploration. Use the dataset generator for model training and experiments:
 
 ```sh
-# Require both JSON and Parquet output.
 uv run python -m t1fx.cli generate --config configs/generation/smoke.json --format both
-
-# Customize generation.
-uv run python -m t1fx.cli generate --config configs/generation/smoke.json --seed 42 --trades 1000
-
-# Replace DATASET_ID with the ID printed by generation.
 uv run python -m t1fx.cli validate-dataset --dataset DATASET_ID
-uv run python -m t1fx.cli export-parquet --dataset DATASET_ID
-
-# Replay a scenario with a USD funding budget.
-uv run python -m t1fx.cli simulate --scenario configs/scenarios/three-trades.json --budget 15000
+uv run python -m t1fx.cli train --dataset DATASET_ID
+uv run python -m t1fx.cli train-timing --dataset DATASET_ID
 ```
 
-Outputs are stored in `artifacts/runs/` and `artifacts/datasets/`. Each dataset includes a manifest, resolved configuration, schemas, validation report, data card, and replayable scenarios. Releases are immutable; Parquet export creates a new release. Identical inputs, source, and runtime produce the same release ID.
+The generator prints `DATASET_ID`; training prints model IDs. The smoke configuration creates 1,000 trades across dated training and evaluation partitions. Data and runs are stored under `artifacts/`. For other commands and model compatibility rules, see the guides below.
 
-The default format is `auto`: JSON plus Parquet when PyArrow is installed, otherwise JSON with an explicit `not_exported` status. Use `--format json` for JSON only. Global `--artifacts PATH` must precede the subcommand.
+## Project layout
 
-Use snapshots as point-in-time observations and outcomes as labels. Event/posting tables contain future records and require time filtering. `simulation_truth/` contains hidden generation parameters and must never be used as model features. Split boundaries allow prior labels to mature before the next partition.
+| Path | Contents |
+| --- | --- |
+| `src/t1fx/` | Simulation, risk models, funding optimizer, API, jobs, and CLI |
+| `frontend/` | React dashboard and browser checks |
+| `configs/` | Scenario and dataset generation inputs |
+| `artifacts/` | Generated datasets, models, and run results; ignored by Git |
+| `docs/` | Detailed architecture, workflows, assumptions, and status |
 
-## Risk models
+## Documentation
 
-```sh
-# Use the dataset ID printed by make smoke.
-make train DATASET=DATASET_ID
+- [Application and dashboard](docs/application.md)
+- [Risk-model workflow](docs/models.md)
+- [FX timing and scenario funding](docs/funding.md)
+- [Implementation status and limitations](docs/implementation-status.md)
+- [Architecture and design decisions](docs/architecture.md)
 
-# Use the model ID printed by training.
-uv run python -m t1fx.cli validate-model --model MODEL_ID
-uv run python -m t1fx.cli score-model --model MODEL_ID --dataset DATASET_ID --split test
-```
-
-Models are saved under `artifacts/models/`, with frozen metrics, test predictions, training provenance, and a model card. Training reserves counterparties, tunes on the tuning partition, and calibrates on the calibration partition. Final reports include chronological and stress evaluations, reliability bins, and uncertainty across scenario days.
-
-Browse `/api/v1/models/MODEL_ID/health` for results. `/api/v1/runs/RUN_ID/model-predictions?model_id=MODEL_ID` scores reference-policy snapshots after the model's calibration period. The original three-trade demo predates that period and cannot be scored by a model trained on the smoke dataset. See [model usage](docs/models.md) for a compatible scenario replay.
-
-## Scenario funding
-
-Train an empirical timing model with `uv run python -m t1fx.cli train-timing --dataset DATASET_ID`.
-Pass its ID to `simulate --timing-model TIMING_MODEL_ID` to compare deterministic and scenario LP funding alongside three fixed funding policies. Use a dataset test scenario after training-label maturity.
-See [funding usage](docs/funding.md) for commands, forecast assumptions, and API endpoints.
-
-## Scope
-
-Calendars, FX conventions, and costs are synthetic assumptions. Generated settlement is USD-only; securities are assumed available. Rule scores are uncalibrated. The engine does not execute payments or FX trades. ML probabilities are calibrated on synthetic data under the fixed-0 funding policy; they do not estimate risk after a new funding intervention. The dashboard and worker are for local use; shared-host authentication and a live replay clock are not implemented.
-
-See [architecture](docs/architecture.md) and [implementation status](docs/implementation-status.md) for design details and limitations.
+The current implementation is designed for one local operator. Generated settlement is USD-only, securities availability is assumed, and model results on synthetic data do not establish real-world accuracy.

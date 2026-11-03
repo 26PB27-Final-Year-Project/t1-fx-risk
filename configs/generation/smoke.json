@@ -11,7 +11,7 @@
   "missed_fx_cutoff_rate": 0.10,
   "ssi_mismatch_rate": 0.06,
   "funding_stress_rate": 0.10,
-  "market": {
+"market": {
     "profile_id": "us-equity-assumed-v1",
     "timezone": "America/New_York",
     "valid_from": "2026-01-01",
@@ -22,31 +22,33 @@
     "settlement_lag": 1,
     "classification": "assumption"
   },
-  "fx_route": {
-    "profile_id": "eur-usd-spot-assumed-v1",
-    "sell_currency": "EUR",
-    "buy_currency": "USD",
-    "timezone": "America/New_York",
-    "booking_cutoff": "17:00:00",
-    "credit_time": "09:00:00",
-    "value_lag": 2,
-    "sell_per_buy": "0.9",
-    "classification": "assumption",
-    "sell_calendar": {
-      "profile_id": "eur-payment-assumed-v1",
-      "timezone": "Europe/Paris",
-      "valid_from": "2026-01-01",
-      "valid_to": "2026-12-31",
-      "holidays": [],
-      "classification": "assumption"
-    },
-    "buy_calendar": {
-      "profile_id": "usd-payment-assumed-v1",
+  "fx_routes": [
+    {
+      "profile_id": "eur-usd-spot-assumed-v1",
+      "sell_currency": "EUR",
+      "buy_currency": "USD",
       "timezone": "America/New_York",
-      "valid_from": "2026-01-01",
-      "valid_to": "2026-12-31",
-      "holidays": [],
-      "classification": "assumption"
+      "booking_cutoff": "17:00:00",
+      "credit_time": "09:00:00",
+      "value_lag": 2,
+      "sell_per_buy": "0.9",
+      "classification": "assumption",
+      "sell_calendar": {
+        "profile_id": "eur-payment-assumed-v1",
+        "timezone": "Europe/Paris",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      },
+      "buy_calendar": {
+        "profile_id": "usd-payment-assumed-v1",
+        "timezone": "America/New_York",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      }
     }
-  }
+  ]
 }

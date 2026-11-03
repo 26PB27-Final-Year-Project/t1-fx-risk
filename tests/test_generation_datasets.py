@@ -54,7 +54,7 @@ def test_random_mechanisms_do_not_shift_unrelated_draws(config):
 
 
 def test_fx_cutoff_holiday_and_closed_day_conventions(config):
-    route = config.fx_route
+    route = config.fx_routes[0]
     # Tuesday before and after cutoff: two versus three joint business days.
     assert route.expected_credit(instant("2026-10-13T20:00:00Z")).date() == date(2026, 10, 15)
     assert route.expected_credit(instant("2026-10-13T22:00:00Z")).date() == date(2026, 10, 16)
@@ -66,7 +66,7 @@ def test_fx_cutoff_holiday_and_closed_day_conventions(config):
 
 def test_profile_coverage_and_invalid_local_configuration_fail(config):
     with pytest.raises(ValueError, match="coverage"):
-        config.fx_route.expected_credit(instant("2027-01-01T12:00:00Z"))
+        config.fx_routes[0].expected_credit(instant("2027-01-01T12:00:00Z"))
     invalid = config.model_dump()
     invalid["decision_time"] = "12:00:00"
     with pytest.raises(ValueError, match="Decision"):

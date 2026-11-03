@@ -51,3 +51,23 @@ def test_preprocessing_uses_trade_weights_and_constant_features():
     preprocessing = fit_preprocessing(x, weights)
     assert preprocessing['mean'][0] == 5
     assert np.all(np.isfinite(transform(x, preprocessing)))
+
+def test_non_usd_currency_normalization():
+    row, trade = observation()
+    # Test EUR normalization
+    trade_eur = trade | {'settlement_amount_minor': 100000}
+    trade_eur['bucket']['currency'] = 'EUR'
+    row_eur = row | {'currency': 'EUR', 'remaining_obligation_minor': 50000}
+    row_eur['bucket']['currency'] = 'EUR'
+    
+    values_eur = feature_row(row_eur, trade_eur, [])
+    assert np.all(np.isfinite(values_eur))
+
+    # Test JPY normalization (zero-decimal currency exponent)
+    trade_jpy = trade | {'settlement_amount_minor': 150000000}
+    trade_jpy['bucket']['currency'] = 'JPY'
+    row_jpy = row | {'currency': 'JPY', 'remaining_obligation_minor': 75000000}
+    row_jpy['bucket']['currency'] = 'JPY'
+    
+    values_jpy = feature_row(row_jpy, trade_jpy, [])
+    assert np.all(np.isfinite(values_jpy))

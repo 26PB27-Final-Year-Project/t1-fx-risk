@@ -38,8 +38,8 @@ class FXRouteProfile(Contract):
             raise ValueError("An FX route must exchange different currencies")
         if self.booking_cutoff.tzinfo or self.credit_time.tzinfo:
             raise ValueError("Route clock times must be local and timezone-naive")
-        if self.sell_currency == "JPY":
-            raise ValueError("Generator source amounts currently require a two-decimal currency")
+        # if self.sell_currency == "JPY":
+        #     raise ValueError("Generator source amounts currently require a two-decimal currency")
         return self
 
     def expected_credit(self, booked_at: datetime) -> datetime:
@@ -72,7 +72,7 @@ class GenerationConfig(Contract):
     counterparty_count: int = Field(default=20, ge=1, le=1000)
     pool_count: int = Field(default=8, ge=1, le=100)
     market: CalendarProfile
-    fx_route: FXRouteProfile
+    fx_routes: tuple[FXRouteProfile, ...] = Field(min_length=1)  # CHANGED from fx_route
     arrival_open: time = time(9, 30)
     arrival_close: time = time(15, 30)
     settlement_open: time = time(9)
@@ -213,21 +213,36 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         if flags["funding_stress"]:
             prefund *= 1-config.funding_stress_fraction
         cash[bucket] += int(prefund)
-
+        route = config.fx_routes[int(rng.integers(len(config.fx_routes)))]
         # FX replenishes the contractual obligation; opening cash is a separate initial resource.
+        # booked = executed + timedelta(minutes=10)
+        # if flags["missed_fx_cutoff"]:
+        #     booked = local_instant(day, config.fx_route.booking_cutoff, config.fx_route.timezone)
+        #     booked += timedelta(minutes=30)
+        # booked = max(booked, executed)
+        # expected = config.fx_route.expected_credit(booked)
+        # sell_amount = int((Decimal(amount)*config.fx_route.sell_per_buy).to_integral_value(rounding=ROUND_CEILING))
+        # source_total += sell_amount
+        # fx_id = f"{trade_id}:FX"
+        # legs.append(FXLeg(
+        #     fx_leg_id=fx_id, bucket=bucket, buy_amount_minor=amount,
+        #     sell_currency=config.fx_route.sell_currency, sell_amount_minor=sell_amount,
+        #     funding_source_id="SOURCE-COMMITTED", booked_at=booked, available_at=booked,
+        #     expected_credit_at=expected,
+        # ))
         booked = executed + timedelta(minutes=10)
         if flags["missed_fx_cutoff"]:
-            booked = local_instant(day, config.fx_route.booking_cutoff, config.fx_route.timezone)
+            booked = local_instant(day, route.booking_cutoff, route.timezone)
             booked += timedelta(minutes=30)
         booked = max(booked, executed)
-        expected = config.fx_route.expected_credit(booked)
-        sell_amount = int((Decimal(amount)*config.fx_route.sell_per_buy).to_integral_value(rounding=ROUND_CEILING))
+        expected = route.expected_credit(booked)
+        sell_amount = int((Decimal(amount)*route.sell_per_buy).to_integral_value(rounding=ROUND_CEILING))
         source_total += sell_amount
         fx_id = f"{trade_id}:FX"
         legs.append(FXLeg(
             fx_leg_id=fx_id, bucket=bucket, buy_amount_minor=amount,
-            sell_currency=config.fx_route.sell_currency, sell_amount_minor=sell_amount,
-            funding_source_id="SOURCE-COMMITTED", booked_at=booked, available_at=booked,
+            sell_currency=route.sell_currency, sell_amount_minor=sell_amount,
+            funding_source_id=f"SOURCE-{route.sell_currency}", booked_at=booked, available_at=booked,
             expected_credit_at=expected,
         ))
         # Actual credit is an exogenous draw. The expected credit field never contains this draw.

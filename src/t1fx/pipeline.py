@@ -33,12 +33,30 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
     credited_ids = frozenset(event.fx_leg_id for event in reference.events
                             if event.event_type == EventType.FX_CREDITED
                             and event.available_at <= scenario.decision_at)
+    # Define your multi-currency exchange rates relative to your base currency (e.g., USD)
+    base_rates = {
+        "USD": Decimal("1.0"),
+        "EUR": Decimal("1.08"),
+        "GBP": Decimal("1.25"),
+        "JPY": Decimal("0.0067"),
+        "CAD": Decimal("0.73"),
+        "INR": Decimal("0.012")
+    }
+    
     currencies = {s.bucket.currency for s in snapshots}
-    if currencies - {"USD"}:
-        raise ValueError("Demo replay supports USD only; supply explicit rates before adding currencies")
+    missing_rates = currencies - set(base_rates.keys())
+    if missing_rates:
+        raise ValueError(f"Missing exchange rates for currencies: {missing_rates}")
+
     problem = deterministic_requirements(
-        snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, {"USD": Decimal(1)},
+        snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, base_rates,
     )
+    # currencies = {s.bucket.currency for s in snapshots}
+    # if currencies - {"USD"}:
+    #     raise ValueError("Demo replay supports USD only; supply explicit rates before adding currencies")
+    # problem = deterministic_requirements(
+    #     snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, {"USD": Decimal(1), "EUR": Decimal("1.08"), "JPY": Decimal("0.0067")},
+    # )
     deterministic = problem
     timing_forecasts = None
     if timing_model_id is not None:
@@ -56,7 +74,7 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         timing_forecasts["timing_model_id"] = timing_model_id
         problem = scenario_requirements(
             snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor,
-            {"USD": Decimal(1)}, draws, weights,
+            base_rates, draws, weights,
         )
     plans = [fixed_percentage(problem, fraction) for fraction in (Decimal(0), Decimal("0.5"), Decimal(1))]
     problems = [problem] * len(plans)

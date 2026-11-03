@@ -48,9 +48,12 @@ def as_snapshot(row):
 def feature_row(row, trade, history):
     """History is never derived from future outcomes or simulation-truth columns."""
     snapshot = as_snapshot(row)
+    # currency = trade.get('currency', trade.get('bucket', {}).get('currency'))
+    # if currency != 'USD' or snapshot.bucket.currency != 'USD':
+    #     raise ValueError('Risk model supports USD settlement only')
+    from t1fx.domain import CURRENCY_EXPONENT
+
     currency = trade.get('currency', trade.get('bucket', {}).get('currency'))
-    if currency != 'USD' or snapshot.bucket.currency != 'USD':
-        raise ValueError('Risk model supports USD settlement only')
     if row.get('reference_policy_id') != 'fixed-0':
         raise ValueError('Risk model requires fixed-0 reference-policy snapshots')
     if snapshot.trade_id != trade['trade_id']:
@@ -72,13 +75,39 @@ def feature_row(row, trade, history):
     amount = trade['settlement_amount_minor']
     if type(amount) is not int or amount <= 0:
         raise ValueError('Trade notional must be positive integer minor units')
-    values = [math.log1p(amount/100), math.log1p(snapshot.remaining_obligation_minor/100),
-              min(10, max(0, snapshot.pool_usable_minor/max(1, snapshot.remaining_obligation_minor))),
-              snapshot.minutes_to_affirmation_cutoff, snapshot.minutes_to_settlement_deadline,
-              float(snapshot.observed_settled),
-              *[float(snapshot.instruction_state == stage) for stage in STAGES],
-              *[float(snapshot.ssi_status == state) for state in SSI],
-              rate, math.log1p(len(cp)), float(not cp)]
+
+    # Map for feature normalization (convert to USD equivalents)
+    rates = {"USD": 1.0, "EUR": 1.08, "GBP": 1.25, "JPY": 0.0067, "CAD": 0.73, "INR": 0.012}
+    trade_rate = rates.get(currency, 1.0)
+    pool_rate = rates.get(snapshot.bucket.currency, 1.0)
+
+    # Calculate actual major units using the specific currency exponent, then convert to USD
+    usd_amount = (amount / (10 ** CURRENCY_EXPONENT[currency])) * trade_rate
+    usd_remaining = (snapshot.remaining_obligation_minor / (10 ** CURRENCY_EXPONENT[snapshot.bucket.currency])) * pool_rate
+
+    values = [
+        math.log1p(usd_amount), 
+        math.log1p(usd_remaining),
+        min(10, max(0, snapshot.pool_usable_minor / max(1, snapshot.remaining_obligation_minor))),
+        snapshot.minutes_to_affirmation_cutoff, 
+        snapshot.minutes_to_settlement_deadline,
+        float(snapshot.observed_settled),
+        *[float(snapshot.instruction_state == stage) for stage in STAGES],
+        *[float(snapshot.ssi_status == state) for state in SSI],
+        rate, 
+        math.log1p(len(cp)), 
+        float(not cp)
+    ]
+    # amount = trade['settlement_amount_minor']
+    # if type(amount) is not int or amount <= 0:
+    #     raise ValueError('Trade notional must be positive integer minor units')
+    # values = [math.log1p(amount/100), math.log1p(snapshot.remaining_obligation_minor/100),
+    #           min(10, max(0, snapshot.pool_usable_minor/max(1, snapshot.remaining_obligation_minor))),
+    #           snapshot.minutes_to_affirmation_cutoff, snapshot.minutes_to_settlement_deadline,
+    #           float(snapshot.observed_settled),
+    #           *[float(snapshot.instruction_state == stage) for stage in STAGES],
+    #           *[float(snapshot.ssi_status == state) for state in SSI],
+    #           rate, math.log1p(len(cp)), float(not cp)]
     if not all(math.isfinite(value) for value in values):
         raise ValueError('Nonfinite model feature')
     return values

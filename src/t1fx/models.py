@@ -103,11 +103,13 @@ class ModelStore:
 
     def list_models(self):
         result = []
-        for path in sorted((self.root/'models').glob('model-*/manifest.json')):
+        for path in sorted((self.root/'models').glob('model-*/manifest.json'), key=lambda p: -p.stat().st_mtime_ns):
             artifacts = self.read(path.parent.name)
             result.append({'model_id': path.parent.name,
                            'dataset_id': artifacts['training_manifest.json']['dataset_id'],
-                           'reference_policy_id': 'fixed-0'})
+                           'reference_policy_id': 'fixed-0',
+                           'settlement_currencies': artifacts['training_manifest.json']['settlement_currencies'],
+                           'calibrated_through': artifacts['training_manifest.json']['partitions']['calibration']['last_label_known_at']})
         return result
 
 
@@ -146,6 +148,10 @@ class RiskModel:
     def predict(self, rows, trades):
         if not rows:
             return []
+        trained_currencies = self.artifacts['training_manifest.json']['settlement_currencies']
+        if any(trades[row['trade_id']].get('currency', trades[row['trade_id']].get('bucket', {}).get('currency'))
+               not in trained_currencies for row in rows):
+            raise ModelUnavailable('Settlement currency differs from the model training dataset')
         known_at = self.artifacts['training_manifest.json']['partitions']['calibration']['last_label_known_at']
         if any(timestamp(row['as_of']) <= timestamp(known_at) for row in rows):
             raise ModelUnavailable('Inference must occur after calibration labels matured; historical training-period scoring is unsupported')

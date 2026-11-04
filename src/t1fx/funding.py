@@ -210,6 +210,7 @@ def deterministic_requirements(
     as_of: datetime,
     budget_minor: int,
     base_rates: dict[Currency, Decimal],
+    base_currency: Currency = "USD",
 ) -> FundingProblem:
     """Use observed obligations/FX forecasts, never the simulation's future event queue."""
     if as_of.tzinfo is None or any(s.as_of != as_of for s in snapshots):
@@ -241,17 +242,17 @@ def deterministic_requirements(
             base_per_currency=base_rates[bucket.currency], holding_coefficient=Decimal("0.001"),
             shortfall_coefficient=Decimal("0.01"), driver_trade_ids=tuple(s.trade_id for s in rows),
         ))
-    return FundingProblem(budget_minor=budget_minor, requirements=tuple(requirements))
+    return FundingProblem(base_currency=base_currency, budget_minor=budget_minor, requirements=tuple(requirements))
 
 
 def scenario_requirements(
     snapshots, visible_fx, credited_leg_ids, as_of, budget_minor, base_rates,
-    arrivals, probabilities,
+    arrivals, probabilities, base_currency="USD",
 ) -> FundingProblem:
     """Compute each path's peak deficit, allocating each shared FX receipt once."""
     # Validate the same observation boundary as the deterministic builder.
     baseline = deterministic_requirements(
-        snapshots, visible_fx, credited_leg_ids, as_of, budget_minor, base_rates,
+        snapshots, visible_fx, credited_leg_ids, as_of, budget_minor, base_rates, base_currency,
     )
     if not arrivals or len(arrivals) != len(probabilities):
         raise ValueError("One weight is required for each arrival scenario")
@@ -265,7 +266,7 @@ def scenario_requirements(
         legs = tuple(leg.model_copy(update={"expected_credit_at": draw[leg.fx_leg_id]})
                      for leg in visible_fx if leg.fx_leg_id in draw and draw[leg.fx_leg_id] is not None)
         paths.append(deterministic_requirements(
-            snapshots, legs, credited_leg_ids, as_of, budget_minor, base_rates,
+            snapshots, legs, credited_leg_ids, as_of, budget_minor, base_rates, base_currency,
         ))
     requirements = []
     for index, requirement in enumerate(baseline.requirements):
@@ -273,5 +274,5 @@ def scenario_requirements(
         requirements.append(requirement.model_copy(update={
             "scenario_amounts_minor": amounts, "cap_minor": max(amounts),
         }))
-    return FundingProblem(budget_minor=budget_minor, probabilities=probabilities,
+    return FundingProblem(base_currency=base_currency, budget_minor=budget_minor, probabilities=probabilities,
                           requirements=tuple(requirements))

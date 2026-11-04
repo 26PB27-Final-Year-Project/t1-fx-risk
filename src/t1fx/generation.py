@@ -21,7 +21,7 @@ from t1fx.domain import (
 class FXRouteProfile(Contract):
     profile_id: str
     sell_currency: Currency = "EUR"
-    buy_currency: Literal["USD"] = "USD"
+    buy_currency: Currency = "EUR"
     timezone: str = "America/New_York"
     booking_cutoff: time = time(17)
     credit_time: time = time(9)
@@ -38,8 +38,6 @@ class FXRouteProfile(Contract):
             raise ValueError("An FX route must exchange different currencies")
         if self.booking_cutoff.tzinfo or self.credit_time.tzinfo:
             raise ValueError("Route clock times must be local and timezone-naive")
-        # if self.sell_currency == "JPY":
-        #     raise ValueError("Generator source amounts currently require a two-decimal currency")
         return self
 
     def expected_credit(self, booked_at: datetime) -> datetime:
@@ -72,7 +70,7 @@ class GenerationConfig(Contract):
     counterparty_count: int = Field(default=20, ge=1, le=1000)
     pool_count: int = Field(default=8, ge=1, le=100)
     market: CalendarProfile
-    fx_routes: tuple[FXRouteProfile, ...] = Field(min_length=1)  # CHANGED from fx_route
+    fx_routes: tuple[FXRouteProfile, ...] = Field(min_length=1)
     arrival_open: time = time(9, 30)
     arrival_close: time = time(15, 30)
     settlement_open: time = time(9)
@@ -95,6 +93,8 @@ class GenerationConfig(Contract):
             raise ValueError("Each trading day must contain at least one trade")
         if self.market.settlement_lag != 1:
             raise ValueError("This generator implements the configured T+1 equity profile")
+        if len({route.buy_currency for route in self.fx_routes}) != 1:
+            raise ValueError("All FX routes must share a settlement currency")
         clocks = (self.arrival_open, self.arrival_close, self.settlement_open, self.decision_time)
         if any(clock.tzinfo for clock in clocks):
             raise ValueError("Generator clock times must be local and timezone-naive")
@@ -141,7 +141,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
     end_day = market.advance(settlement_day, config.recovery_business_days)
     end = market.cutoff_at(end_day, "settlement")
     scenario_id = f"{config.config_id}-s{config.seed}-{day.isoformat()}"
-    pools = [Bucket(cash_pool_id=f"POOL-{i:03}", currency="USD") for i in range(config.pool_count)]
+    pools = [Bucket(cash_pool_id=f"POOL-{i:03}", currency=config.fx_routes[0].buy_currency) for i in range(config.pool_count)]
     cash = {pool: 0 for pool in pools}
     trades, events, legs, injections = [], [], [], []
     counterparties = []
@@ -152,7 +152,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
             "counterparty_id": cp_id,
             "delay_multiplier": float(np.clip(rng.lognormal(0, 0.65), 0.3, 6)),
         })
-    source_total = 0
+    source_totals: dict[Currency, int] = {}
     for index in range(count):
         trade_id = f"{scenario_id}-T{index:06}"
         rng = random_stream(config.seed, day, index, "trade")
@@ -213,31 +213,20 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         if flags["funding_stress"]:
             prefund *= 1-config.funding_stress_fraction
         cash[bucket] += int(prefund)
-        route = config.fx_routes[int(rng.integers(len(config.fx_routes)))]
+        route = config.fx_routes[index % len(config.fx_routes)]
         # FX replenishes the contractual obligation; opening cash is a separate initial resource.
-        # booked = executed + timedelta(minutes=10)
-        # if flags["missed_fx_cutoff"]:
-        #     booked = local_instant(day, config.fx_route.booking_cutoff, config.fx_route.timezone)
-        #     booked += timedelta(minutes=30)
-        # booked = max(booked, executed)
-        # expected = config.fx_route.expected_credit(booked)
-        # sell_amount = int((Decimal(amount)*config.fx_route.sell_per_buy).to_integral_value(rounding=ROUND_CEILING))
-        # source_total += sell_amount
-        # fx_id = f"{trade_id}:FX"
-        # legs.append(FXLeg(
-        #     fx_leg_id=fx_id, bucket=bucket, buy_amount_minor=amount,
-        #     sell_currency=config.fx_route.sell_currency, sell_amount_minor=sell_amount,
-        #     funding_source_id="SOURCE-COMMITTED", booked_at=booked, available_at=booked,
-        #     expected_credit_at=expected,
-        # ))
         booked = executed + timedelta(minutes=10)
         if flags["missed_fx_cutoff"]:
             booked = local_instant(day, route.booking_cutoff, route.timezone)
             booked += timedelta(minutes=30)
         booked = max(booked, executed)
         expected = route.expected_credit(booked)
-        sell_amount = int((Decimal(amount)*route.sell_per_buy).to_integral_value(rounding=ROUND_CEILING))
-        source_total += sell_amount
+        from t1fx.domain import CURRENCY_EXPONENT
+
+        sell_amount = int((Decimal(amount).scaleb(-2) * route.sell_per_buy).scaleb(
+            CURRENCY_EXPONENT[route.sell_currency],
+        ).to_integral_value(rounding=ROUND_CEILING))
+        source_totals[route.sell_currency] = source_totals.get(route.sell_currency, 0) + sell_amount
         fx_id = f"{trade_id}:FX"
         legs.append(FXLeg(
             fx_leg_id=fx_id, bucket=bucket, buy_amount_minor=amount,
@@ -268,11 +257,12 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         scenario_id=scenario_id, starts_at=start, decision_at=decision, ends_at=end,
         trades=tuple(trades), events=tuple(events), fx_legs=tuple(legs),
         opening_cash=tuple(OpeningCash(bucket=bucket, amount_minor=amount) for bucket, amount in cash.items()),
-        funding_sources=(FundingSource(source_id="SOURCE-COMMITTED",
-                                       currency=config.fx_route.sell_currency, capacity_minor=source_total),),
+        funding_sources=tuple(FundingSource(
+            source_id=f"SOURCE-{currency}", currency=currency, capacity_minor=total,
+        ) for currency, total in sorted(source_totals.items())),
         costs=config.costs,
         settlement_windows=tuple(windows),
-        assumption="Synthetic USD equities, assumed calendar/FX conventions, securities available, fixed-0 reference policy.",
+        assumption="Synthetic EUR equities, assumed calendar/FX conventions, securities available, fixed-0 reference policy.",
     )
     return GeneratedDay(scenario, split, tuple(injections), tuple(counterparties))
 

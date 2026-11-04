@@ -7,6 +7,8 @@ import time
 import uuid
 from contextlib import contextmanager
 from decimal import Decimal
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Annotated
 
@@ -17,7 +19,27 @@ from t1fx.storage import RunStore, canonical_bytes, digest
 
 class RecomputeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    evaluation_local: datetime | None = None
+    evaluation_timezone: str = "UTC"
+
+    @field_validator("evaluation_timezone")
+    @classmethod
+    def valid_timezone(cls, value):
+        try:
+            ZoneInfo(value)
+        except (KeyError, ValueError) as exc:
+            raise ValueError("Choose a valid IANA timezone") from exc
+        return value
+
+    @field_validator("evaluation_local")
+    @classmethod
+    def naive_local(cls, value):
+        if value is not None and value.tzinfo is not None:
+            raise ValueError("Use a local date and time with a separate timezone")
+        return value
+
     liquidity_limit: str = Field(pattern=r"^(0|[1-9][0-9]{0,11})(\.[0-9]{1,2})?$")
+    timing_model_id: str | None = Field(default=None, pattern=r"^timing-[0-9a-f]{20}$")
     scenario_seed: Annotated[int, Field(strict=True, ge=0, le=2**32-1)] = 42
     scenario_count: Annotated[int, Field(strict=True, ge=1, le=500)] = 200
     common_shock_weight: float = Field(default=0.5, ge=0, le=1)
@@ -67,7 +89,7 @@ class JobStore:
                 "error": row["error"]}
 
     def submit(self, run_id, request: RecomputeRequest, key: str):
-        payload = {"run_id": run_id, **request.model_dump()}
+        payload = {"run_id": run_id, **request.model_dump(mode="json")}
         request_hash = digest(payload)
         now = time.time()
         with self.connection() as db:
@@ -154,11 +176,21 @@ def work_once(root: Path, lease_seconds=60):
         store = RunStore(root)
         manifest = store.validate(payload["run_id"])
         scenario = Scenario.model_validate(store.read(payload["run_id"], "scenario.json"))
+        if payload.get("evaluation_local"):
+            from t1fx.calendars import local_instant
+
+            local = datetime.fromisoformat(payload["evaluation_local"])
+            decision = local_instant(local.date(), local.time(), payload["evaluation_timezone"])
+            scenario = Scenario.model_validate(scenario.model_dump() | {"decision_at": decision})
+        fx_rate_snapshot = store.read(payload["run_id"], "fx_rates.json")
+        if payload.get("evaluation_local") and scenario.decision_at != datetime.fromisoformat(manifest["decision_at"]):
+            fx_rate_snapshot = None
         result = run_comparison(
             scenario, int(Decimal(payload["liquidity_limit"])*100), store,
-            timing_model_id=manifest.get("timing_model_id"),
+            timing_model_id=payload.get("timing_model_id") or manifest.get("timing_model_id"),
             scenario_seed=payload["scenario_seed"], scenario_count=payload["scenario_count"],
             common_shock_weight=payload["common_shock_weight"],
+            fx_rate_snapshot=fx_rate_snapshot,
         )
         for row in result["runs"]:
             store.validate(row["run_id"])

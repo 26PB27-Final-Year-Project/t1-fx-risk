@@ -31,6 +31,23 @@ def test_seeded_generation_is_reproducible_and_changes_with_seed(config):
     assert sum(len(day.scenario.trades) for day in first) == 80
     assert {day.split for day in first} == {"train", "tuning", "calibration", "test"}
     assert len({trade.trade_id for day in first for trade in day.scenario.trades}) == 80
+    assert {source.currency for day in first for source in day.scenario.funding_sources} == {
+        "CAD", "USD", "GBP", "JPY", "INR",
+    }
+
+
+def test_multiple_fx_sources_and_jpy_minor_units(config):
+    jpy = config.fx_routes[0].model_copy(update={
+        "profile_id": "jpy-usd-test", "sell_currency": "JPY", "sell_per_buy": 150,
+    })
+    mixed = config.model_copy(update={"fx_routes": (config.fx_routes[0], jpy)})
+    scenario = generate_day(mixed, mixed.start_date, 40, "train").scenario
+    assert {source.currency for source in scenario.funding_sources} == {"USD", "JPY"}
+    for source in scenario.funding_sources:
+        matching = [leg for leg in scenario.fx_legs if leg.funding_source_id == source.source_id]
+        assert sum(leg.sell_amount_minor for leg in matching) == source.capacity_minor
+    jpy_leg = next(leg for leg in scenario.fx_legs if leg.sell_currency == "JPY")
+    assert jpy_leg.sell_amount_minor == (jpy_leg.buy_amount_minor * 150 + 99) // 100
 
 
 def test_calendar_coverage_can_end_at_final_recovery_day(config):

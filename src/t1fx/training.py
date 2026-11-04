@@ -225,7 +225,8 @@ def train_model(root: Path, dataset_id: str):
     assert digest(fitted) == frozen_hash
     versions = {name: importlib.metadata.version(name) for name in ('numpy', 'scipy', 'scikit-learn', 'xgboost')}
     versions['python'] = platform.python_version()
-    training = {'dataset_id': dataset_id, 'dataset_identity': manifest['identity'],
+    training = {'settlement_currencies': sorted({t['currency'] for t in trades.values()}),
+                'dataset_id': dataset_id, 'dataset_identity': manifest['identity'],
                 'feature_schema_hash': FEATURE_HASH, 'fitted_artifacts_hash': frozen_hash,
                 'reference_policy_id': 'fixed-0', 'training_config': TRAINING_CONFIG,
                 'versions': versions, 'code_hash': _code_hash(), 'selected_candidates': [best_lr[2], best_xgb[2]],
@@ -235,7 +236,7 @@ def train_model(root: Path, dataset_id: str):
                 'label_counts': {split: dict(Counter(map(str, labels[split]))) for split in SPLITS},
                 'label_semantics': 'Missed contractual deadline under fixed-0; censored recovery does not censor this known binary label.'}
     card = ("# Settlement risk model\n\n"
-            "Synthetic USD research model predicting deadline failure under the fixed-0 reference funding policy. "
+            "Synthetic settlement-currency research model predicting deadline failure under the fixed-0 reference funding policy. "
             "XGBoost is the predeclared primary model; logistic regression and uncalibrated rules are baselines. "
             "No superiority is assumed.\n\n"
             "Training-only scaling and dated counterparty history; tuning-only candidate selection; separate "

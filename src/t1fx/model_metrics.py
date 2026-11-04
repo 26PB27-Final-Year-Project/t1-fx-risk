@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
 
 from t1fx.features import snapshot_weights
+from t1fx.domain import CURRENCY_EXPONENT
 
 
 def evaluate(rows, y, scores, trades, *, probability=True, capacity=0.1):
@@ -41,13 +42,20 @@ def evaluate(rows, y, scores, trades, *, probability=True, capacity=0.1):
         ordered = sorted(indices, key=lambda i: (-float(scores[i]), rows[i]['trade_id']))
         selected[ordered[:max(1, math.ceil(len(ordered)*capacity))]] = True
     tp = float(np.sum(weights*selected*y))
+    currencies = {trades[r['trade_id']].get('currency', trades[r['trade_id']].get('bucket', {}).get('currency')) for r in rows}
+    if len(currencies) != 1:
+        raise ValueError('Exposure evaluation requires a single settlement currency')
+    currency = currencies.pop()
+    if currency not in CURRENCY_EXPONENT:
+        raise ValueError('Exposure evaluation requires an explicit supported currency')
     amount = np.asarray([trades[r['trade_id']]['settlement_amount_minor'] for r in rows])
     failed_exposure = float(np.sum(weights*y*amount))
     missed_exposure = float(np.sum(weights*y*amount*~selected))
     result['alert_capacity'] = {'fraction': capacity, 'selected_rows': int(selected.sum()),
                               'precision': tp/float(np.sum(weights*selected)),
                               'recall': tp/positives if positives else None,
-                              'missed_exposure_usd': missed_exposure/100,
+                              'currency': currency,
+                              'missed_exposure': missed_exposure/(10 ** CURRENCY_EXPONENT[currency]),
                               'missed_exposure_fraction': missed_exposure/failed_exposure if failed_exposure else None}
     return result
 

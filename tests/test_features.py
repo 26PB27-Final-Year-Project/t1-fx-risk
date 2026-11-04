@@ -52,7 +52,7 @@ def test_preprocessing_uses_trade_weights_and_constant_features():
     assert preprocessing['mean'][0] == 5
     assert np.all(np.isfinite(transform(x, preprocessing)))
 
-def test_non_usd_currency_normalization():
+def test_non_usd_currency_is_rejected_until_model_is_trained():
     row, trade = observation()
     # Test EUR normalization
     trade_eur = trade | {'settlement_amount_minor': 100000}
@@ -60,8 +60,7 @@ def test_non_usd_currency_normalization():
     row_eur = row | {'currency': 'EUR', 'remaining_obligation_minor': 50000}
     row_eur['bucket']['currency'] = 'EUR'
     
-    values_eur = feature_row(row_eur, trade_eur, [])
-    assert np.all(np.isfinite(values_eur))
+    assert np.all(np.isfinite(feature_row(row_eur, trade_eur, [])))
 
     # Test JPY normalization (zero-decimal currency exponent)
     trade_jpy = trade | {'settlement_amount_minor': 150000000}
@@ -69,5 +68,5 @@ def test_non_usd_currency_normalization():
     row_jpy = row | {'currency': 'JPY', 'remaining_obligation_minor': 75000000}
     row_jpy['bucket']['currency'] = 'JPY'
     
-    values_jpy = feature_row(row_jpy, trade_jpy, [])
-    assert np.all(np.isfinite(values_jpy))
+    with pytest.raises(ValueError, match='USD or EUR settlement'):
+        feature_row(row_jpy, trade_jpy, [])

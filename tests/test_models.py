@@ -116,8 +116,10 @@ def test_calibration_single_class_and_extreme_margins():
 
 def test_single_class_metrics_are_explicit_and_capacity_has_stable_ties():
     rows = [{'trade_id': str(i), 'scenario_id': 'day', 'as_of': 'time'} for i in range(10)]
-    trades = {str(i): {'settlement_amount_minor': 100} for i in range(10)}
+    trades = {str(i): {'settlement_amount_minor': 100, 'currency': 'EUR'} for i in range(10)}
     report = evaluate(rows, np.zeros(10), np.ones(10)*.2, trades)
+    assert report['alert_capacity']['currency'] == 'EUR'
+    assert 'missed_exposure_usd' not in report['alert_capacity']
     assert report['roc_auc'] is None
     assert report['pr_auc_average_precision'] is None
     assert report['alert_capacity']['selected_rows'] == 1
@@ -139,6 +141,15 @@ def test_model_api_and_cli(trained, capsys):
     scenario_path = root/'datasets'/dataset['dataset_id']/'scenarios'/f"{row['scenario_id']}.json"
     scenario = Scenario.model_validate_json(scenario_path.read_text())
     replay = run_comparison(scenario, 100000, RunStore(root))
+    eligible = client.get('/api/v1/models', params={'run_id': replay['runs'][0]['run_id']})
+    assert result['model_id'] in {item['model_id'] for item in eligible.json()['items']}
+    from t1fx.fixtures import three_trade_scenario
+    legacy = run_comparison(three_trade_scenario(), 100000, RunStore(root))
+    assert client.get('/api/v1/models', params={'run_id': legacy['runs'][0]['run_id']}).json()['items'] == []
+    incompatible = client.get(f"/api/v1/runs/{legacy['runs'][0]['run_id']}/model-predictions",
+                              params={'model_id': result['model_id']})
+    assert incompatible.status_code == 409
+    assert incompatible.json()['code'] == 'MODEL_UNAVAILABLE'
     response = client.get(f"/api/v1/runs/{replay['runs'][0]['run_id']}/model-predictions",
                           params={'model_id': result['model_id'], 'trade_id': row['trade_id']})
     assert response.status_code == 200, response.text

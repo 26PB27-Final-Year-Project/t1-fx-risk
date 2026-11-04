@@ -18,6 +18,7 @@ from t1fx.domain import CURRENCY_EXPONENT, Currency, Event, Outcome, RulePredict
 from t1fx.storage import ArtifactError, RunStore
 from t1fx.jobs import JobConflict, JobStore, RecomputeRequest
 from t1fx.models import ModelStore, ModelUnavailable, RiskModel
+from t1fx.online_clock import online_time, OnlineClockUnavailable
 
 
 class TradeView(BaseModel):
@@ -30,6 +31,7 @@ class TradeView(BaseModel):
     observed_pool_cash: str
     instruction_state: str
     ssi_status: str
+    executed_at: datetime
     deadline_at: datetime
     minutes_to_deadline: float
     prediction: RulePrediction
@@ -113,13 +115,39 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             store.validate(run["run_id"])
         return {"status": "ready", "run_count": len(runs), "model": "UNCALIBRATED_RULE_SCORE"}
 
+    @app.exception_handler(OnlineClockUnavailable)
+    async def clock_unavailable(request, exc):
+        return error_response(request, 503, "ONLINE_TIME_UNAVAILABLE", str(exc))
+
+    @app.get("/api/v1/time")
+    def get_online_time():
+        return online_time()
+
     @app.get("/api/v1/runs")
     def list_runs():
         return {"items": store.list_runs()}
 
     @app.get("/api/v1/models")
-    def list_models():
-        return {"items": models.list_models()}
+    def list_models(run_id: str | None = None):
+        items = models.list_models()
+        if run_id:
+            manifest = store.manifest(run_id)
+            currencies = {trade['bucket']['currency'] for trade in store.read(run_id, 'scenario.json')['trades']}
+            decision = datetime.fromisoformat(manifest['decision_at'])
+            items = [item for item in items if currencies <= set(item['settlement_currencies'])
+                     and decision > datetime.fromisoformat(item['calibrated_through'])]
+        return {"items": items}
+
+    @app.get("/api/v1/timing-models")
+    def list_timing_models():
+        from t1fx.timing import load_model
+
+        items = []
+        for path in sorted((store.root / "timing_models").glob("timing-*.json")):
+            model, _ = load_model(store.root, path.stem)
+            items.append({"model_id": path.stem, "dataset_id": model.dataset_id,
+                          "trained_through": model.trained_through.isoformat()})
+        return {"items": items}
 
     @app.get("/api/v1/models/{model_id}/health")
     def model_health(model_id: str):
@@ -134,7 +162,9 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         manifest = store.validate(run_id)
         rows = store.read(run_id, "snapshots.json")
         rows = [row | {"reference_policy_id": manifest["reference_policy_id"]} for row in rows
-                if trade_id is None or row["trade_id"] == trade_id]
+                if (trade_id is None or row["trade_id"] == trade_id)
+                and not row["observed_settled"]
+                and datetime.fromisoformat(row["as_of"]) < datetime.fromisoformat(row["horizon_at"])]
         if trade_id is not None and not rows:
             raise HTTPException(404, "Trade not found at this decision time.")
         trades = {trade["trade_id"]: trade for trade in store.read(run_id, "scenario.json")["trades"]}
@@ -160,6 +190,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                 remaining_obligation=str(whole(snapshot["remaining_obligation_minor"], currency)),
                 observed_pool_cash=str(whole(snapshot["pool_usable_minor"], currency)),
                 instruction_state=snapshot["instruction_state"], ssi_status=snapshot["ssi_status"],
+                executed_at=trade["executed_at"],
                 deadline_at=snapshot["horizon_at"],
                 minutes_to_deadline=snapshot["minutes_to_settlement_deadline"],
                 prediction=scores[trade["trade_id"]],
@@ -169,7 +200,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
     @app.get("/api/v1/runs/{run_id}/trades", response_model=TradePage)
     def list_trades(
         run_id: str, limit: int = Query(50, ge=1, le=100), cursor: str | None = None,
-        currency: Currency | None = None, sort: Literal["risk", "amount", "probability"] = "risk",
+        currency: Currency | None = None, sort: Literal["risk", "amount", "probability", "deadline"] = "risk",
         min_score: int = Query(0, ge=0, le=100), state: str | None = None,
         model_id: str | None = None,
     ):
@@ -186,8 +217,9 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             probabilities = {p["trade_id"]: p["p_fail_any"]
                              for p in model_predictions(run_id, model_id)["items"]}
         rows.sort(key=lambda row: (
-            -probabilities[row.trade_id] if sort == "probability" else
-            -row.prediction.score if sort == "risk" else -Decimal(row.settlement_amount), row.trade_id,
+            -probabilities.get(row.trade_id, -1) if sort == "probability" else
+            -row.prediction.score if sort == "risk" else
+            row.minutes_to_deadline if sort == "deadline" else -Decimal(row.settlement_amount), row.trade_id,
         ))
         if cursor:
             ids = [row.trade_id for row in rows]
@@ -276,6 +308,21 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
     def get_metrics(run_id: str):
         return {"run_id": run_id, "metrics": store.read(run_id, "metrics.json")}
 
+    @app.get("/api/v1/runs/{run_id}/evaluation-context")
+    def evaluation_context(run_id: str):
+        scenario = store.read(run_id, "scenario.json")
+        return {"starts_at": scenario["starts_at"], "ends_at": scenario["ends_at"],
+                "trades": [{"trade_id": t["trade_id"], "executed_at": t["executed_at"],
+                            "deadline_at": t["contractual_deadline_at"],
+                            "currency": t["bucket"]["currency"]} for t in scenario["trades"]]}
+
+    @app.get("/api/v1/runs/{run_id}/fx-rates")
+    def get_fx_rates(run_id: str):
+        manifest = store.manifest(run_id)
+        if "fx_rates.json" not in manifest["files"]:
+            raise HTTPException(404, "This run has no saved FX reference rates.")
+        return {"run_id": run_id, "rates": store.read(run_id, "fx_rates.json")}
+
     def require_local_origin(request: Request):
         origin = request.headers.get("origin")
         if origin and origin != str(request.base_url).rstrip("/"):
@@ -288,6 +335,28 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                   idempotency_key: str = Header(min_length=1, max_length=128)):
         require_local_origin(request)
         store.validate(run_id)
+        if body.timing_model_id:
+            from t1fx.timing import load_model
+            load_model(store.root, body.timing_model_id)
+        if body.evaluation_local is not None:
+            from t1fx.calendars import local_instant
+            from zoneinfo import ZoneInfo
+
+            try:
+                decision = local_instant(body.evaluation_local.date(), body.evaluation_local.time(), body.evaluation_timezone)
+                now = datetime.fromisoformat(online_time()['utc_now'])
+                if decision > now:
+                    raise HTTPException(422, "Evaluation must be at or before the current online date and time.")
+                scenario = store.read(run_id, "scenario.json")
+                start = datetime.fromisoformat(scenario["starts_at"])
+                end = datetime.fromisoformat(scenario["ends_at"])
+                if not start <= decision < end:
+                    zone = ZoneInfo(body.evaluation_timezone)
+                    first = start.astimezone(zone).strftime("%d %b %Y, %H:%M")
+                    last = end.astimezone(zone).strftime("%d %b %Y, %H:%M")
+                    raise HTTPException(422, f"Choose an evaluation time from {first} until before {last} ({body.evaluation_timezone}). To evaluate another month, select a run containing trades for that month.")
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         return jobs.submit(run_id, body, idempotency_key)
 
     @app.get("/api/v1/jobs/{job_id}")

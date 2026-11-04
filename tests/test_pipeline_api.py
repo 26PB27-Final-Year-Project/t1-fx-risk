@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
@@ -9,6 +10,58 @@ from t1fx.cli import main, usd_minor
 from t1fx.fixtures import three_trade_scenario
 from t1fx.pipeline import run_comparison
 from t1fx.storage import ArtifactError, RunStore
+
+
+def test_eur_demo_uses_all_funding_currencies_and_eur_budget(tmp_path):
+    from t1fx.fixtures import demo_scenario
+
+    scenario = demo_scenario()
+    from datetime import date, timedelta
+    assert all(date.today()-timedelta(days=29) <= trade.executed_at.date() <= date.today()
+               for trade in scenario.trades)
+    assert len({trade.executed_at.date() for trade in scenario.trades}) > 10
+    assert {trade.bucket.currency for trade in scenario.trades} == {"EUR"}
+    assert {source.currency for source in scenario.funding_sources} == {
+        "USD", "CAD", "GBP", "JPY", "INR",
+    }
+    store = RunStore(tmp_path)
+    report = run_comparison(scenario, 3_000_000, store)
+    for run in report["runs"]:
+        assert run["currency"] == "EUR"
+        assert Decimal(run["budget_used"]) <= Decimal("30000")
+        rates = store.read(run["run_id"], "fx_rates.json")
+        assert rates["base_currency"] == "EUR"
+        assert store.read(run["run_id"], "funding_plan.json")["base_currency"] == "EUR"
+        assert all(datetime.fromisoformat(row['as_of']) >= next(
+            trade.executed_at for trade in scenario.trades if trade.trade_id == row['trade_id']
+        ) for row in store.read(run['run_id'], 'snapshots.json'))
+
+
+def test_evaluation_calendar_job_and_timezone_validation(demo):
+    from t1fx.jobs import work_once
+
+    store, report, client = demo
+    run_id = report["runs"][0]["run_id"]
+    body = {"liquidity_limit": "30000", "evaluation_local": "2026-10-14T18:00:00",
+            "evaluation_timezone": "Asia/Kolkata"}
+    response = client.post(f"/api/v1/runs/{run_id}/funding/recompute", json=body,
+                           headers={"Idempotency-Key": "evaluation-test"})
+    assert response.status_code == 202, response.text
+    assert work_once(store.root)
+    job = client.get('/api/v1/jobs/' + response.json()['job_id']).json()
+    assert job['status'] == 'SUCCEEDED', job
+    updated = store.manifest(job['result']['runs'][0]['run_id'])
+    assert updated['decision_at'].startswith('2026-10-14T12:30:00')
+    for change in ({"evaluation_timezone": "invalid/zone"},
+                   {"evaluation_local": "2020-01-01T00:00:00"}):
+        response = client.post(f"/api/v1/runs/{run_id}/funding/recompute", json=body | change,
+                               headers={"Idempotency-Key": "invalid-evaluation"})
+        assert response.status_code == 422
+        if 'evaluation_local' in change:
+            message = response.json()['message']
+            assert 'Choose an evaluation time' in message
+            assert '2026' in message
+            assert 'pydantic' not in message.lower()
 
 
 @pytest.fixture
@@ -71,6 +124,7 @@ def test_api_trade_list_detail_funding_and_money_serialization(demo):
     assert fx["incremental_reserve"] == "30000.00"
     assert "incremental_reserve_minor" not in fx
     assert client.get(f"/api/v1/runs/{run_id}/metrics").json()["metrics"]["failed_count"] == 0
+    assert client.get(f"/api/v1/runs/{run_id}/fx-rates").json()["rates"]["base_currency"] == "USD"
 
 
 def test_api_consistent_errors_and_validated_pagination(demo):

@@ -3,10 +3,12 @@
 import hashlib
 import importlib.metadata
 import platform
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 from t1fx.domain import EventType, Scenario, whole
+from t1fx.fx_rates import fetch_rates, valuation_rates
 from t1fx.funding import deterministic_requirements, fixed_percentage, optimize, scenario_requirements
 from t1fx.simulator import simulate
 from t1fx.snapshots import build_snapshots, score_rules
@@ -24,7 +26,8 @@ def _code_hash() -> str:
 
 def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
                    timing_model_id: str | None = None, scenario_seed: int = 42,
-                   scenario_count: int = 200, common_shock_weight: float = 0.5) -> dict:
+                   scenario_count: int = 200, common_shock_weight: float = 0.5,
+                   fx_rate_snapshot: dict | None = None) -> dict:
     # Deliberately stop the reference replay at decision time before constructing plans.
     reference = simulate(scenario, until=scenario.decision_at)
     snapshots = build_snapshots(reference, scenario.decision_at)
@@ -33,30 +36,20 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
     credited_ids = frozenset(event.fx_leg_id for event in reference.events
                             if event.event_type == EventType.FX_CREDITED
                             and event.available_at <= scenario.decision_at)
-    # Define your multi-currency exchange rates relative to your base currency (e.g., USD)
-    base_rates = {
-        "USD": Decimal("1.0"),
-        "EUR": Decimal("1.08"),
-        "GBP": Decimal("1.25"),
-        "JPY": Decimal("0.0067"),
-        "CAD": Decimal("0.73"),
-        "INR": Decimal("0.012")
-    }
-    
-    currencies = {s.bucket.currency for s in snapshots}
-    missing_rates = currencies - set(base_rates.keys())
-    if missing_rates:
-        raise ValueError(f"Missing exchange rates for currencies: {missing_rates}")
+    settlement_currencies = {trade.bucket.currency for trade in scenario.trades}
+    base_currency = next(iter(settlement_currencies)) if len(settlement_currencies) == 1 else "EUR"
+    currencies = set(settlement_currencies)
+    currencies.update(source.currency for source in scenario.funding_sources)
+    fx_rate_snapshot = fx_rate_snapshot or fetch_rates(currencies, min(
+        scenario.decision_at.date(), date.today(),
+    ), base_currency=base_currency)
+    if fx_rate_snapshot["base_currency"] != base_currency:
+        raise ValueError("Saved rates disagree with settlement currency")
+    base_rates = valuation_rates(fx_rate_snapshot, currencies)
 
     problem = deterministic_requirements(
-        snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, base_rates,
+        snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, base_rates, base_currency,
     )
-    # currencies = {s.bucket.currency for s in snapshots}
-    # if currencies - {"USD"}:
-    #     raise ValueError("Demo replay supports USD only; supply explicit rates before adding currencies")
-    # problem = deterministic_requirements(
-    #     snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor, {"USD": Decimal(1), "EUR": Decimal("1.08"), "JPY": Decimal("0.0067")},
-    # )
     deterministic = problem
     timing_forecasts = None
     if timing_model_id is not None:
@@ -74,7 +67,7 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         timing_forecasts["timing_model_id"] = timing_model_id
         problem = scenario_requirements(
             snapshots, visible_fx, credited_ids, scenario.decision_at, budget_minor,
-            base_rates, draws, weights,
+            base_rates, draws, weights, base_currency=base_currency,
         )
     plans = [fixed_percentage(problem, fraction) for fraction in (Decimal(0), Decimal("0.5"), Decimal(1))]
     problems = [problem] * len(plans)
@@ -95,30 +88,34 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         "code_hash": code_hash, "environment": environment,
         "plans": [plan.model_dump(mode="json") for plan in plans],
         "timing_forecasts": timing_forecasts,
+        "fx_rate_snapshot": fx_rate_snapshot,
     })[:20]
     reports = []
     for plan, plan_problem in zip(plans, problems, strict=True):
         funding = {allocation.bucket: allocation.incremental_reserve_minor for allocation in plan.allocations}
         result = simulate(scenario, funding=funding)
-        late_cost = sum((outcome.late_cost for outcome in result.outcomes), Decimal(0))
-        route_cost = sum((outcome.route_fee for outcome in result.outcomes), Decimal(0))
-        bridge_cost = sum(result.bridge_costs.values(), Decimal(0))
+        trade_currencies = {trade.trade_id: trade.bucket.currency for trade in scenario.trades}
+        late_cost = sum((outcome.late_cost * base_rates[trade_currencies[outcome.trade_id]]
+                         for outcome in result.outcomes), Decimal(0))
+        route_cost = sum((outcome.route_fee * base_rates[trade_currencies[outcome.trade_id]]
+                          for outcome in result.outcomes), Decimal(0))
+        bridge_cost = sum((cost * base_rates[bucket.currency]
+                           for bucket, cost in result.bridge_costs.items()), Decimal(0))
         failed_ids = {outcome.trade_id for outcome in result.outcomes
                       if outcome.missed_contractual_deadline is True}
         metrics = {
-            "currency": "USD", "trade_count": len(scenario.trades),
-            "failed_notional": str(whole(sum(
-                trade.settlement_amount_minor for trade in scenario.trades
-                if trade.trade_id in failed_ids
-            ), "USD")),
+            "currency": base_currency, "trade_count": len(scenario.trades),
+            "failed_notional": str(sum((whole(trade.settlement_amount_minor, trade.bucket.currency)
+                * base_rates[trade.bucket.currency] for trade in scenario.trades
+                if trade.trade_id in failed_ids), Decimal(0))),
             "failed_count": sum(outcome.missed_contractual_deadline is True for outcome in result.outcomes),
             "recovered_late_count": sum(outcome.recovered_late for outcome in result.outcomes),
             "censored_count": sum(outcome.censored for outcome in result.outcomes),
             "late_cost": str(late_cost), "route_cost": str(route_cost),
             "bridge_cost": str(bridge_cost), "total_cost": str(late_cost+route_cost+bridge_cost),
-            "budget_limit": str(whole(budget_minor, "USD")),
+            "budget_limit": str(whole(budget_minor, base_currency)),
             "budget_used": str(plan.budget_used_base),
-            "bridge_outstanding": str(sum((whole(amount, bucket.currency)
+            "bridge_outstanding": str(sum((whole(amount, bucket.currency) * base_rates[bucket.currency]
                                            for bucket, amount in result.bridge_outstanding_minor.items()), Decimal(0))),
             "cost_classification": "synthetic_assumptions",
         }
@@ -133,6 +130,7 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
             "funding_plan.json": plan.model_dump(mode="json"),
             "outcomes.json": [outcome.model_dump(mode="json") for outcome in result.outcomes],
             "metrics.json": metrics,
+            "fx_rates.json": fx_rate_snapshot,
         }
         if timing_forecasts is not None:
             artifacts["timing_forecasts.json"] = timing_forecasts

@@ -17,7 +17,7 @@ def usd_minor(value: str) -> int:
         if not amount.is_finite() or amount < 0 or amount*100 != (amount*100).to_integral_value():
             raise ValueError
     except (InvalidOperation, ValueError):
-        raise argparse.ArgumentTypeError("Use a nonnegative USD amount with at most two decimals") from None
+        raise argparse.ArgumentTypeError("Use a nonnegative settlement-currency amount with at most two decimals") from None
     return int(amount*100)
 
 
@@ -26,9 +26,13 @@ def main(argv=None):
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts"))
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("demo", help="Replay 50 synthetic trades with four funding policies")
-    demo.add_argument("--budget", type=usd_minor, default=3_000_000, help="USD amount; default 30000")
+    demo.add_argument("--budget", type=usd_minor, default=3_000_000, help="Settlement-currency amount (EUR for demo); default 30000")
     demo.add_argument("--trades", type=int, default=50, help="Synthetic trades; 3–100 (default 50)")
     demo.add_argument("--seed", type=int, default=42, help="Reproducible demo seed (default 42)")
+    bootstrap = sub.add_parser("bootstrap", help="Prepare data, risk and timing models, and a monthly five-policy demo")
+    bootstrap.add_argument("--budget", type=usd_minor, default=3_000_000)
+    bootstrap.add_argument("--trades", type=int, default=50)
+    bootstrap.add_argument("--seed", type=int, default=42)
     simulation = sub.add_parser("simulate", help="Compare policies on a validated scenario JSON")
     simulation.add_argument("--scenario", type=Path, required=True)
     simulation.add_argument("--budget", type=usd_minor, default=3_000_000)
@@ -68,7 +72,17 @@ def main(argv=None):
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
     store = RunStore(args.artifacts)
-    if args.command in ("demo", "simulate"):
+    if args.command == "bootstrap":
+        try:
+            from t1fx.demo import bootstrap_demo
+            print(json.dumps(bootstrap_demo(args.artifacts, args.trades, args.seed, args.budget), indent=2))
+        except ImportError as exc:
+            parser.error(f"Bootstrap requires the ML dependencies: {exc}. "
+                         "Run: uv sync --extra ml --extra parquet. "
+                         "On macOS, XGBoost also requires: brew install libomp")
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            parser.error(str(exc))
+    elif args.command in ("demo", "simulate"):
         try:
             scenario = demo_scenario(args.trades, args.seed) if args.command == "demo" else Scenario.model_validate_json(
                 args.scenario.read_text(),

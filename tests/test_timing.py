@@ -86,6 +86,17 @@ def test_timing_replay_integrity_and_api(tmp_path):
     run_id = report["runs"][-1]["run_id"]
     assert client.get(f"/api/v1/runs/{run_id}/timing-forecasts").status_code == 200
     assert client.get(f"/api/v1/timing-models/{model_id}/health").status_code == 200
+    assert client.get('/api/v1/timing-models').json()['items'][0]['model_id'] == model_id
+    response = client.post(f'/api/v1/runs/{run_id}/funding/recompute',
+                           json={'liquidity_limit': '25000', 'timing_model_id': model_id,
+                                 'scenario_count': 17},
+                           headers={'Idempotency-Key': 'timing-worker'})
+    assert response.status_code == 202
+    from t1fx.jobs import work_once
+    assert work_once(tmp_path)
+    job = client.get('/api/v1/jobs/' + response.json()['job_id']).json()
+    assert job['status'] == 'SUCCEEDED', job
+    assert len(job['result']['runs']) == 5
     (tmp_path/"timing_models"/f"{model_id}.json").write_text('{}')
     with pytest.raises(ArtifactError):
         load_model(tmp_path, model_id)

@@ -220,7 +220,7 @@ def publish_dataset(root, tables, scenarios, config, report, provenance, output_
             f"- Censored trades: {report['censored_count']}\n- Reference policy: fixed-0\n"
             f"- Formats: {', '.join(identity['formats'])}\n\n"
             "Calendar holidays and FX cutoffs are explicitly assumed profiles, not official schedules. "
-            "Only USD purchases are generated. Securities are assumed available. Each day is an "
+            "Purchases use the configured settlement currency (EUR by default). Securities are assumed available. Each day is an "
             "independent cash pool episode; balances do not roll across days. Opening cash and fully "
             "committed FX receipts are separate resources. No optimizer intervention is applied.\n\n"
             "Partitions contain whole trading days. All labels in one partition mature before the "

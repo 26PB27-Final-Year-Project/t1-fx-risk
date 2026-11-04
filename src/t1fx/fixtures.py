@@ -1,7 +1,6 @@
 """Hand-checkable starting scenario; all market times and cost rates are assumptions."""
 
 from datetime import datetime
-from random import Random
 
 from t1fx.domain import (
     Bucket,
@@ -72,67 +71,68 @@ def three_trade_scenario() -> Scenario:
     )
 
 
-def demo_scenario(trade_count: int = 50, seed: int = 42) -> Scenario:
-    """Build a reproducible dashboard sample while retaining the small reference fixture."""
+def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario:
+    """A trailing 30-day schedule; explicit month remains available for research replay."""
+    import calendar
+    from datetime import date, timedelta, time
+    from pathlib import Path
+
+    from t1fx.generation import generate_day, load_config
+    from t1fx.calendars import local_instant
+
     if trade_count < 3 or trade_count > 100:
         raise ValueError("Demo trade count must be between 3 and 100")
-    reference = three_trade_scenario()
-    scenario_id = f"demo-{trade_count}-s{seed}-v1"
-    rng = Random(seed)
-    trades = [trade.model_copy(update={"scenario_id": scenario_id}) for trade in reference.trades]
-    events = list(reference.events)
-    opening_cash = list(reference.opening_cash)
-    extra_pools = [Bucket(cash_pool_id=f"DEMO-{i:02}", currency="USD") for i in range(1, 13)]
-    obligations = {pool: 0 for pool in extra_pools}
-
-    for index in range(trade_count - len(trades)):
-        trade_id = f"T-DEMO-{index + 1:03}"
-        pool = extra_pools[index % len(extra_pools)]
-        amount = rng.randrange(550_000, 5_500_001, 25_000)
-        obligations[pool] += amount
-        trade = Trade(
-            trade_id=trade_id, scenario_id=scenario_id,
-            counterparty_id=f"CP-{rng.randrange(1, 21):02}",
-            security_id=f"EQUITY-{rng.randrange(1, 101):03}",
-            market_profile_id="us-equity-demo-v1", bucket=pool,
-            settlement_amount_minor=amount,
-            executed_at=instant("2026-10-13T14:00:00Z"),
-            available_at=instant("2026-10-13T14:00:00Z"),
-            affirmation_cutoff_at=instant("2026-10-14T01:00:00Z"),
-            settlement_open_at=instant("2026-10-14T13:00:00Z"),
-            contractual_deadline_at=instant("2026-10-14T20:00:00Z"),
-        )
-        trades.append(trade)
-        late_affirmation = index % 11 == 3
-        invalid_ssi = index % 13 == 5
-        sequence = (
-            (EventType.ALLOCATED, "2026-10-13T14:10:00Z"),
-            (EventType.SSI_MISMATCH if invalid_ssi else EventType.SSI_VALID,
-             "2026-10-13T14:30:00Z"),
-            (EventType.CONFIRMED, "2026-10-13T15:00:00Z"),
-            (EventType.AFFIRMED, "2026-10-14T02:00:00Z" if late_affirmation
-             else "2026-10-13T16:00:00Z"),
-        )
-        for order, (kind, timestamp) in enumerate(sequence):
-            events.append(Event(
-                event_id=f"{trade_id}:{kind}", trade_id=trade_id, event_type=kind,
-                event_time=instant(timestamp), available_at=instant(timestamp), sequence=order,
-            ))
-        if invalid_ssi:
-            events.append(Event(
-                event_id=f"{trade_id}:SSI_VALID:repair", trade_id=trade_id,
-                event_type=EventType.SSI_VALID,
-                event_time=instant("2026-10-14T14:00:00Z"),
-                available_at=instant("2026-10-14T14:00:00Z"), sequence=4,
-            ))
-
-    for index, pool in enumerate(extra_pools):
-        fraction = (55, 70, 85, 100)[index % 4]
-        opening_cash.append(OpeningCash(
-            bucket=pool, amount_minor=obligations[pool] * fraction // 100,
-        ))
-    return Scenario.model_validate({**reference.model_dump(), **{
-        "scenario_id": scenario_id, "trades": tuple(trades), "events": tuple(events),
-        "opening_cash": tuple(opening_cash),
-        "assumption": "Seeded synthetic USD demo; cash, calendars, FX and costs are assumptions.",
-    }})
+    rolling = month is None
+    today = date.today()
+    first = today - timedelta(days=29)
+    month = month or first
+    config = load_config(Path("configs/generation/smoke.json")).model_copy(update={"seed": seed})
+    year = month.year
+    market = config.market.model_copy(update={"valid_from": date(year, 1, 1), "valid_to": date(year+1, 12, 31)})
+    routes = tuple(route.model_copy(update={
+        "sell_calendar": route.sell_calendar.model_copy(update={"valid_from": date(year, 1, 1), "valid_to": date(year+1, 12, 31)}),
+        "buy_calendar": route.buy_calendar.model_copy(update={"valid_from": date(year, 1, 1), "valid_to": date(year+1, 12, 31)}),
+    }) for route in config.fx_routes)
+    config = config.model_copy(update={"market": market, "fx_routes": routes})
+    days = [date(year, month.month, day) for day in range(1, calendar.monthrange(year, month.month)[1]+1)
+            if market.is_business_day(date(year, month.month, day))]
+    if rolling:
+        days = [first + timedelta(days=i) for i in range(30)
+                if market.is_business_day(first + timedelta(days=i))]
+    days = days[:trade_count]
+    combined = None
+    windows = {}
+    scenario_id = f"demo-{trade_count}-s{seed}-eur-{month:%Y-%m}" + (f"-30d-{today}" if rolling else "")
+    for index, day in enumerate(days):
+        count = trade_count // len(days) + (index < trade_count % len(days))
+        # Rotate the daily route order so short daily samples cover every funding currency.
+        offset = index % len(config.fx_routes)
+        daily = config.model_copy(update={"fx_routes": config.fx_routes[offset:] + config.fx_routes[:offset]})
+        data = generate_day(daily, day, count, "test").scenario.model_dump(mode="json")
+        prefix = day.isoformat() + ":"
+        for table in ("trades", "fx_legs", "opening_cash"):
+            for row in data[table]:
+                row["bucket"]["cash_pool_id"] = prefix + row["bucket"]["cash_pool_id"]
+        for row in data["funding_sources"]:
+            row["source_id"] = prefix + row["source_id"]
+        for row in data["fx_legs"]:
+            row["funding_source_id"] = prefix + row["funding_source_id"]
+        for trade in data["trades"]:
+            trade["scenario_id"] = scenario_id
+        for window in data["settlement_windows"]:
+            windows[window["opens_at"]] = window
+        if combined is None:
+            combined = data
+        else:
+            for table in ("trades", "events", "fx_legs", "opening_cash", "funding_sources"):
+                combined[table].extend(data[table])
+            combined["ends_at"] = data["ends_at"]
+    if rolling:
+        combined["starts_at"] = local_instant(first, time(0), market.timezone).isoformat()
+    combined["scenario_id"] = scenario_id
+    combined["settlement_windows"] = list(windows.values())
+    combined["assumption"] = "Synthetic EUR business-day schedule; observations respect execution time. Daily cash pools are isolated."
+    start = datetime.fromisoformat(combined["starts_at"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(combined["ends_at"].replace("Z", "+00:00"))
+    combined["decision_at"] = max(start, min(local_instant(date.today(), config.decision_time, market.timezone), end-timedelta(seconds=1))).isoformat()
+    return Scenario.model_validate(combined)

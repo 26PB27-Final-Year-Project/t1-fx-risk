@@ -21,12 +21,11 @@ from t1fx.domain import (
 class FXRouteProfile(Contract):
     profile_id: str
     sell_currency: Currency = "EUR"
-    buy_currency: Currency = "EUR"
+    buy_currency: Currency = "USD"
     timezone: str = "America/New_York"
     booking_cutoff: time = time(17)
     credit_time: time = time(9)
     value_lag: int = Field(default=2, ge=0, le=5)
-    sell_per_buy: Decimal = Field(default=Decimal("0.9"), gt=0)
     sell_calendar: CalendarProfile
     buy_calendar: CalendarProfile
     classification: Literal["assumption", "scenario_override"] = "assumption"
@@ -126,6 +125,11 @@ class GeneratedDay:
     counterparty_truth: tuple[dict, ...]
 
 
+def reference_snapshot(currencies, day, base):
+    from t1fx.fx_rates import fetch_rates
+    return fetch_rates(set(currencies), day, base)
+
+
 def generate_day(config: GenerationConfig, day: date, count: int, split: str) -> GeneratedDay:
     market = config.market
     settlement_day = market.settlement_date(day)
@@ -141,6 +145,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
     end_day = market.advance(settlement_day, config.recovery_business_days)
     end = market.cutoff_at(end_day, "settlement")
     scenario_id = f"{config.config_id}-s{config.seed}-{day.isoformat()}"
+    daily_prices = {}
     pools = [Bucket(cash_pool_id=f"POOL-{i:03}", currency=config.fx_routes[0].buy_currency) for i in range(config.pool_count)]
     cash = {pool: 0 for pool in pools}
     trades, events, legs, injections = [], [], [], []
@@ -223,7 +228,16 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         expected = route.expected_credit(booked)
         from t1fx.domain import CURRENCY_EXPONENT
 
-        sell_amount = int((Decimal(amount).scaleb(-2) * route.sell_per_buy).scaleb(
+        # Use the preceding day's published reference, avoiding same-day publication lookahead.
+        from t1fx.fx_rates import valuation_rates
+        pricing_date = min(booked.date() - timedelta(days=1), date.today())
+        price_key = (tuple(sorted(r.sell_currency for r in config.fx_routes)), pricing_date, route.buy_currency)
+        if price_key not in daily_prices:
+            daily_prices[price_key] = reference_snapshot(*price_key)
+        snapshot = daily_prices[price_key]
+        rate = valuation_rates(snapshot, {route.sell_currency})[route.sell_currency]
+        quote = next(row for row in snapshot["observations"] if row["currency"] == route.sell_currency)
+        sell_amount = int((Decimal(amount).scaleb(-2) / rate).scaleb(
             CURRENCY_EXPONENT[route.sell_currency],
         ).to_integral_value(rounding=ROUND_CEILING))
         source_totals[route.sell_currency] = source_totals.get(route.sell_currency, 0) + sell_amount
@@ -232,7 +246,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
             fx_leg_id=fx_id, bucket=bucket, buy_amount_minor=amount,
             sell_currency=route.sell_currency, sell_amount_minor=sell_amount,
             funding_source_id=f"SOURCE-{route.sell_currency}", booked_at=booked, available_at=booked,
-            expected_credit_at=expected,
+            expected_credit_at=expected, pricing=quote | {"source": snapshot["source"], "base_currency": route.buy_currency},
         ))
         # Actual credit is an exogenous draw. The expected credit field never contains this draw.
         credit_rng = random_stream(config.seed, day, index, "fx_credit_delay")

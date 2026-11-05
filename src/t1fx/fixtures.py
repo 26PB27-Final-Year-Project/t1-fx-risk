@@ -102,7 +102,7 @@ def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario
     days = days[:trade_count]
     combined = None
     windows = {}
-    scenario_id = f"demo-{trade_count}-s{seed}-eur-{month:%Y-%m}" + (f"-30d-{today}" if rolling else "")
+    scenario_id = f"demo-{trade_count}-s{seed}-usd-{month:%Y-%m}" + (f"-30d-{today}" if rolling else "")
     for index, day in enumerate(days):
         count = trade_count // len(days) + (index < trade_count % len(days))
         # Rotate the daily route order so short daily samples cover every funding currency.
@@ -131,7 +131,7 @@ def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario
         combined["starts_at"] = local_instant(first, time(0), market.timezone).isoformat()
     combined["scenario_id"] = scenario_id
     combined["settlement_windows"] = list(windows.values())
-    combined["assumption"] = "Synthetic EUR business-day schedule; observations respect execution time. Daily cash pools are isolated."
+    combined["assumption"] = "Synthetic USD business-day schedule; observations respect execution time. Daily cash pools are isolated."
     start = datetime.fromisoformat(combined["starts_at"].replace("Z", "+00:00"))
     end = datetime.fromisoformat(combined["ends_at"].replace("Z", "+00:00"))
     combined["decision_at"] = max(start, min(local_instant(date.today(), config.decision_time, market.timezone), end-timedelta(seconds=1))).isoformat()

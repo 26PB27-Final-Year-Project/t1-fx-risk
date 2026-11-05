@@ -26,7 +26,7 @@
 
 ## Risk-model milestone
 
-- One versioned feature function serves training and inference: USD notional, observable cash coverage, lifecycle state, time to cutoffs, and dated counterparty failure history. Feature names, units, and categorical mappings are persisted.
+- One versioned feature function serves training and inference: settlement-currency notional, observable cash coverage, lifecycle state, time to cutoffs, and dated counterparty failure history. Feature names, units, and categorical mappings are persisted.
 - Logistic regression and XGBoost compare unweighted and class-balanced fitting using trade-normalized snapshot weights. A fixed candidate grid is selected by tuning log loss.
 - Monotonic sigmoid calibration uses only the separate calibration cohort. Models, preprocessing, calibration, and thresholds are frozen before final evaluation.
 - Counterparty holdouts are excluded from all fitting and historical features. A predeclared stress family is evaluated after freezing.
@@ -47,7 +47,7 @@
 ## Application milestone (Gate G)
 
 - Local React/TypeScript dashboard with trade inspection, funding, matched scenarios, and model health; explicit loading, empty, model-unavailable and request-error states.
-- Currency/state/score filters, model probability sorting, observed FX tracks, SHAP factors, separate decision/outcome clocks, and decimal-string amounts.
+- Currency/state filters and deadline sorting, model probability sorting, observed FX tracks, SHAP factors, separate decision/outcome clocks, and decimal-string amounts.
 - SQLite job registry with transactional claims, normalized idempotency keys, renewable leases, bounded restart recovery, owner fencing, cancellation and durable result/error references.
 - Separate CLI worker runs funding comparisons and validates immutable artifacts before completing a job. Same-origin mutation checks and loopback host restrictions protect the local API.
 - Comparison identities isolate budgets and forecast settings; browser job references survive reloads and stale responses are ignored.
@@ -55,7 +55,7 @@
 
 ## Current simplifications
 
-1. The demo uses three purchases, USD settlement, three segregated cash pools, and an externally funded EUR/USD receipt. The standalone LP supports multiple currencies; the comparison pipeline deliberately rejects non-USD portfolios until valuation rates are supplied explicitly.
+1. The default demo generates 50 EUR settlement purchases, with USD, CAD, GBP, JPY, and INR funding routes. Funding budgets and comparison metrics use EUR, with dated Frankfurter rates saved per run. The three-trade USD fixture remains available for hand checking.
 2. The fixture's market profile is synthetic. Its calendar utility is tested independently; the fixture timestamps are explicit inputs, not generated from an official calendar feed. The joint-calendar FX utility is a simplified configurable convention, not a universal spot-date rule.
 3. All securities are assumed available. There is no securities inventory, contractual netting, partial settlement, or real custodian integration.
 4. FX source-currency commitments are capacity-checked. Full source-currency ledger movements and treasury-wide FX optimization are not implemented.
@@ -78,6 +78,6 @@ The original engine tests check the fixture, cash conservation/idempotency, inva
 
 Gate F used Python 3.14.7 with dependency versions recorded in `requirements-py314.lock`. Gate G passed all 79 backend tests on Python 3.11.16, the TypeScript/Vite production build, and four Chromium Playwright checks. These cover the complete recompute flow, browser reload recovery, API error recovery, mobile navigation and stale trade-detail responses. A FastAPI/Starlette dependency warning currently recommends `httpx2` for test clients; the installed `httpx` compatibility path works and all API tests pass. No production reliance is placed on the test client.
 
-CI configuration includes Python engine checks and the dashboard build/browser flow, but has not been run remotely. Frontend dependencies are pinned by `frontend/package-lock.json`; universal Python dependency locking remains future work.
+CI configuration includes Python engine checks and the dashboard build/browser flow, but has not been run remotely. Frontend dependencies are pinned by `frontend/package-lock.json`; the repository includes a universal `uv.lock`; CI currently installs with pip rather than enforcing that lock.
 
 The API is covered by FastAPI test-client checks. The application milestone also uses a temporary live loopback server and Chromium for browser acceptance; restricted sandboxes require permission to bind and launch the browser. Start `make serve` and `make worker` to use the dashboard locally.

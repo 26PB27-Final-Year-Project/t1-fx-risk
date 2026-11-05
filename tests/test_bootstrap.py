@@ -25,6 +25,6 @@ def test_clean_bootstrap_prepares_models_and_five_valid_policies(tmp_path, capsy
         manifest = store.validate(run['run_id'])
         assert timing.trained_through < datetime.fromisoformat(manifest['decision_at'])
         assert manifest['timing_model_id'] == result['timing_model_id']
-        assert run['currency'] == 'EUR'
+        assert run['currency'] == 'USD'
         assert store.read(run['run_id'], 'timing_forecasts.json')['scenario_count'] == 200
-    assert risk.artifacts['training_manifest.json']['settlement_currencies'] == ['EUR']
+    assert risk.artifacts['training_manifest.json']['settlement_currencies'] == ['USD']

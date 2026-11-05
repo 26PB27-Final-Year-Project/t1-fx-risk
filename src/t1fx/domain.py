@@ -81,6 +81,7 @@ class FundingSource(Contract):
 
 
 class FXLeg(Contract):
+    pricing: dict | None = None
     fx_leg_id: str
     bucket: Bucket
     buy_amount_minor: PositiveMinor

@@ -36,4 +36,4 @@ Predictions apply to the fixed-0 reference snapshots stored in each run. The run
 
 Tree SHAP contributions and the expected margin sum to the raw XGBoost log-odds. The calibrated probability is separate; contributions are associations, not causal effects or additive percentage-point changes. Inference returns all contributions and the three largest by absolute magnitude. The implementation uses [XGBoost's native contribution predictions](https://xgboost.readthedocs.io/en/stable/python/python_api.html#xgboost.Booster.predict).
 
-Synthetic calibration and strong test scores do not establish performance on actual settlement data. FX arrival forecasting, production history feeds, and the full funding-scenario engine are subsequent work.
+Synthetic calibration and strong test scores do not establish performance on actual settlement data. Empirical FX arrival forecasting and scenario funding are implemented; production history feeds, a calibrated timing classifier, and broader experimental validation remain future work.

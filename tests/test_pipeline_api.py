@@ -20,18 +20,18 @@ def test_eur_demo_uses_all_funding_currencies_and_eur_budget(tmp_path):
     assert all(date.today()-timedelta(days=29) <= trade.executed_at.date() <= date.today()
                for trade in scenario.trades)
     assert len({trade.executed_at.date() for trade in scenario.trades}) > 10
-    assert {trade.bucket.currency for trade in scenario.trades} == {"EUR"}
+    assert {trade.bucket.currency for trade in scenario.trades} == {"USD"}
     assert {source.currency for source in scenario.funding_sources} == {
-        "USD", "CAD", "GBP", "JPY", "INR",
+        "EUR", "CAD", "GBP", "JPY", "INR",
     }
     store = RunStore(tmp_path)
     report = run_comparison(scenario, 3_000_000, store)
     for run in report["runs"]:
-        assert run["currency"] == "EUR"
+        assert run["currency"] == "USD"
         assert Decimal(run["budget_used"]) <= Decimal("30000")
         rates = store.read(run["run_id"], "fx_rates.json")
-        assert rates["base_currency"] == "EUR"
-        assert store.read(run["run_id"], "funding_plan.json")["base_currency"] == "EUR"
+        assert rates["base_currency"] == "USD"
+        assert store.read(run["run_id"], "funding_plan.json")["base_currency"] == "USD"
         assert all(datetime.fromisoformat(row['as_of']) >= next(
             trade.executed_at for trade in scenario.trades if trade.trade_id == row['trade_id']
         ) for row in store.read(run['run_id'], 'snapshots.json'))
@@ -162,3 +162,21 @@ def test_cli_fixture_and_custom_scenario_pipeline(tmp_path, capsys):
     main(["--artifacts", str(tmp_path/"artifacts"), "validate", "--run", report["runs"][0]["run_id"]])
     assert "Validated" in capsys.readouterr().out
     assert usd_minor("12.34") == 1234
+
+
+def test_watchlist_currency_matches_funding_and_preserves_original_amount(tmp_path):
+    from t1fx.fixtures import demo_scenario
+    scenario = demo_scenario()
+    report = run_comparison(scenario, 3_000_000, RunStore(tmp_path))
+    client = TestClient(create_app(tmp_path))
+    run_id = report["runs"][0]["run_id"]
+    page = client.get(f"/api/v1/runs/{run_id}/trades").json()
+    assert set(page["available_currencies"]) == {"USD", "EUR", "CAD", "GBP", "JPY", "INR"}
+    for currency in page["available_currencies"]:
+        response = client.get(f"/api/v1/runs/{run_id}/trades", params={"currency": currency})
+        assert response.status_code == 200
+        rows = response.json()["items"]
+        assert rows
+        assert all(row["currency"] == currency or any(fx["sell_currency"] == currency for fx in row["fx_conversions"]) for row in rows)
+        assert all(Decimal(row["settlement_amount"]) > 0 for row in rows)
+    assert any(row["observed_settled"] and Decimal(row["remaining_obligation"]) == 0 for row in page["items"])

@@ -10,7 +10,7 @@ test:
 	$(PYTHON) -m pytest
 
 demo:
-	$(PYTHON) -m t1fx.cli demo
+	$(PYTHON) -m t1fx.cli bootstrap
 
 smoke:
 	$(PYTHON) -m t1fx.cli generate --config configs/generation/smoke.json --format $(DATASET_FORMAT)

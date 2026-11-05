@@ -4,7 +4,13 @@ test('trade inspection, funding job, reload recovery, scenarios, and model empty
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
-  await expect(page.getByRole('heading', {name: 'At-risk trades'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Trade watchlist'})).toBeVisible();
+  await page.getByText('How to read this page', {exact: true}).click();
+  await expect(page.getByText('The model’s estimated chance', {exact: false})).toBeVisible();
+  await page.getByText('How to read this page', {exact: true}).click();
+  await expect(page.getByRole('columnheader', {name: 'Rule score', exact: true})).toHaveCount(0);
+  await expect(page.getByRole('combobox', {name: 'Minimum rule score', exact: true})).toHaveCount(0);
+  await expect(page.getByRole('combobox', {name: 'Sort', exact: true})).toContainText('Nearest deadline');
   await page.getByRole('button', {name: 'T-FX-GAP', exact: true}).click();
   await expect(page.getByRole('region', {name: 'Trade detail'})).toBeVisible();
   await expect(page.getByText('FX receipts in this cash pool')).toBeVisible();
@@ -207,4 +213,43 @@ test('all workspace pages fit the remaining width when the sidebar expands', asy
       }
     }
   }
+});
+
+test('evaluation calendar blocks unavailable dates and offers 38 timezones', async ({page}) => {
+  await page.goto('/');
+  await expect(page.getByText(/Available:/)).toBeVisible();
+  await expect(page.getByText('Evaluation time (UTC)',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'Evaluation date',exact:true}).click();
+  await expect(page.getByRole('button',{name:'2026-10-12',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'Next month',exact:true})).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await page.getByRole('combobox',{name:'Evaluation timezone',exact:true}).click();
+  await expect(page.getByRole('option')).toHaveCount(38);
+  await page.getByRole('option',{name:'Asia/Kolkata',exact:true}).click();
+  await expect(page.getByText(/Available:/)).toContainText('Asia/Kolkata');
+});
+
+test('calendar evaluation publishes a new run without duplicating controls', async ({page}) => {
+  await page.goto('/');
+  await expect(page.getByText(/Available:/)).toBeVisible();
+  const previous = page.url();
+  await page.getByLabel('Evaluation local time',{exact:true}).fill('12:15');
+  await page.getByRole('button',{name:'Apply evaluation',exact:true}).click();
+  await expect.poll(()=>page.url()).not.toBe(previous);
+  await expect(page.getByRole('button',{name:'Evaluation date',exact:true})).toHaveCount(1);
+  await expect(page.getByRole('button',{name:'Apply evaluation',exact:true})).toBeEnabled();
+});
+
+test('online date caps the calendar and deadlines use hours or days', async ({page}) => {
+  await page.route('**/api/v1/time', route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({utc_now:'2026-10-14T12:30:00Z',source:'test://clock',stale:false})}));
+  await page.goto('/');
+  await expect(page.getByText(/Online time \(UTC\):/)).toBeVisible();
+  await page.getByRole('button',{name:'Evaluation date',exact:true}).click();
+  await expect(page.getByRole('button',{name:'2026-10-15',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'2026-10-14',exact:true})).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await page.getByLabel('Evaluation local time',{exact:true}).fill('13:00');
+  await expect(page.getByRole('button',{name:'Apply evaluation',exact:true})).toBeDisabled();
+  await expect(page.locator('.deadline').first()).toContainText(/h|d/);
+  for (const value of await page.locator('.deadline').allTextContents()) expect(value).not.toContain('min');
 });

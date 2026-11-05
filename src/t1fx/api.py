@@ -22,6 +22,8 @@ from t1fx.online_clock import online_time, OnlineClockUnavailable
 
 
 class TradeView(BaseModel):
+    fx_conversions: list[dict] = []
+    observed_settled: bool = False
     trade_id: str
     counterparty_id: str
     cash_pool_id: str
@@ -41,6 +43,7 @@ class TradePage(BaseModel):
     run_id: str
     as_of: datetime
     reference_policy_id: str
+    available_currencies: list[str] = []
     items: list[TradeView]
     next_cursor: str | None
 
@@ -184,12 +187,20 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             trade = trades[snapshot["trade_id"]]
             currency = snapshot["bucket"]["currency"]
             result.append(TradeView(
+                fx_conversions=[{"sell_currency": leg["sell_currency"],
+                                 "sell_amount": str(whole(leg["sell_amount_minor"], leg["sell_currency"])),
+                                 "buy_currency": currency, "buy_amount": str(whole(leg["buy_amount_minor"], currency)),
+                                 "pricing": leg.get("pricing")}
+                                for leg in store.read(run_id, "scenario.json")["fx_legs"]
+                                if leg["fx_leg_id"] == trade["trade_id"] + ":FX"
+                                and datetime.fromisoformat(leg["available_at"]) <= datetime.fromisoformat(store.manifest(run_id)["decision_at"])],
                 trade_id=trade["trade_id"], counterparty_id=trade["counterparty_id"],
                 cash_pool_id=snapshot["bucket"]["cash_pool_id"], currency=currency,
                 settlement_amount=str(whole(trade["settlement_amount_minor"], currency)),
                 remaining_obligation=str(whole(snapshot["remaining_obligation_minor"], currency)),
                 observed_pool_cash=str(whole(snapshot["pool_usable_minor"], currency)),
                 instruction_state=snapshot["instruction_state"], ssi_status=snapshot["ssi_status"],
+                observed_settled=snapshot["observed_settled"],
                 executed_at=trade["executed_at"],
                 deadline_at=snapshot["horizon_at"],
                 minutes_to_deadline=snapshot["minutes_to_settlement_deadline"],
@@ -205,7 +216,11 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         model_id: str | None = None,
     ):
         manifest = store.manifest(run_id)
-        rows = [row for row in trade_rows(run_id) if currency is None or row.currency == currency]
+        all_rows = trade_rows(run_id)
+        available_currencies = sorted({c for row in all_rows for c in
+            [row.currency, *(leg["sell_currency"] for leg in row.fx_conversions)]})
+        rows = [row for row in all_rows if currency is None or row.currency == currency
+                or any(leg["sell_currency"] == currency for leg in row.fx_conversions)]
         rows = [row for row in rows if row.prediction.score >= min_score
                 and (state is None or row.instruction_state == state)]
         if sort == "amount" and len({row.currency for row in rows}) > 1:
@@ -228,7 +243,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             rows = rows[ids.index(cursor)+1:]
         return TradePage(
             run_id=run_id, as_of=manifest["decision_at"],
-            reference_policy_id=manifest["reference_policy_id"], items=rows[:limit],
+            reference_policy_id=manifest["reference_policy_id"], available_currencies=available_currencies, items=rows[:limit],
             next_cursor=rows[limit-1].trade_id if len(rows) > limit else None,
         )
 

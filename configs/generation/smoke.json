@@ -1,5 +1,5 @@
 {
-  "config_id": "smoke-v1",
+  "config_id": "us-equity-usd-v2",
   "seed": 42,
   "trade_count": 1000,
   "trading_days": 10,
@@ -8,10 +8,10 @@
   "pool_count": 8,
   "opening_cash_fraction": "0.95",
   "late_confirmation_rate": 0.08,
-  "missed_fx_cutoff_rate": 0.10,
+  "missed_fx_cutoff_rate": 0.1,
   "ssi_mismatch_rate": 0.06,
-  "funding_stress_rate": 0.10,
-"market": {
+  "funding_stress_rate": 0.1,
+  "market": {
     "profile_id": "us-equity-assumed-v1",
     "timezone": "America/New_York",
     "valid_from": "2026-01-01",
@@ -24,17 +24,16 @@
   },
   "fx_routes": [
     {
-      "profile_id": "eur-usd-spot-assumed-v1",
+      "profile_id": "eur-usd-reference-v2",
       "sell_currency": "EUR",
       "buy_currency": "USD",
       "timezone": "America/New_York",
       "booking_cutoff": "17:00:00",
       "credit_time": "09:00:00",
       "value_lag": 2,
-      "sell_per_buy": "0.9",
       "classification": "assumption",
       "sell_calendar": {
-        "profile_id": "eur-payment-assumed-v1",
+        "profile_id": "usd-payment-assumed-v1",
         "timezone": "Europe/Paris",
         "valid_from": "2026-01-01",
         "valid_to": "2026-12-31",
@@ -42,7 +41,111 @@
         "classification": "assumption"
       },
       "buy_calendar": {
-        "profile_id": "usd-payment-assumed-v1",
+        "profile_id": "eur-payment-assumed-v1",
+        "timezone": "America/New_York",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      }
+    },
+    {
+      "profile_id": "cad-usd-reference-v2",
+      "sell_currency": "CAD",
+      "buy_currency": "USD",
+      "timezone": "America/New_York",
+      "booking_cutoff": "17:00:00",
+      "credit_time": "09:00:00",
+      "value_lag": 2,
+      "classification": "assumption",
+      "sell_calendar": {
+        "profile_id": "cad-payment-assumed-v1",
+        "timezone": "America/Toronto",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      },
+      "buy_calendar": {
+        "profile_id": "eur-payment-assumed-v1",
+        "timezone": "America/New_York",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      }
+    },
+    {
+      "profile_id": "gbp-usd-reference-v2",
+      "sell_currency": "GBP",
+      "buy_currency": "USD",
+      "timezone": "America/New_York",
+      "booking_cutoff": "17:00:00",
+      "credit_time": "09:00:00",
+      "value_lag": 2,
+      "classification": "assumption",
+      "sell_calendar": {
+        "profile_id": "gbp-payment-assumed-v1",
+        "timezone": "Europe/London",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      },
+      "buy_calendar": {
+        "profile_id": "eur-payment-assumed-v1",
+        "timezone": "America/New_York",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      }
+    },
+    {
+      "profile_id": "jpy-usd-reference-v2",
+      "sell_currency": "JPY",
+      "buy_currency": "USD",
+      "timezone": "America/New_York",
+      "booking_cutoff": "17:00:00",
+      "credit_time": "09:00:00",
+      "value_lag": 2,
+      "classification": "assumption",
+      "sell_calendar": {
+        "profile_id": "jpy-payment-assumed-v1",
+        "timezone": "Asia/Tokyo",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      },
+      "buy_calendar": {
+        "profile_id": "eur-payment-assumed-v1",
+        "timezone": "America/New_York",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      }
+    },
+    {
+      "profile_id": "inr-usd-reference-v2",
+      "sell_currency": "INR",
+      "buy_currency": "USD",
+      "timezone": "America/New_York",
+      "booking_cutoff": "17:00:00",
+      "credit_time": "09:00:00",
+      "value_lag": 2,
+      "classification": "assumption",
+      "sell_calendar": {
+        "profile_id": "inr-payment-assumed-v1",
+        "timezone": "Asia/Kolkata",
+        "valid_from": "2026-01-01",
+        "valid_to": "2026-12-31",
+        "holidays": [],
+        "classification": "assumption"
+      },
+      "buy_calendar": {
+        "profile_id": "eur-payment-assumed-v1",
         "timezone": "America/New_York",
         "valid_from": "2026-01-01",
         "valid_to": "2026-12-31",

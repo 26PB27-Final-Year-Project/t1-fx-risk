@@ -21,7 +21,13 @@ from t1fx.models import ModelStore, ModelUnavailable, RiskModel
 from t1fx.online_clock import online_time, OnlineClockUnavailable
 
 
+from t1fx.presentation import trade_labels
+
+
 class TradeView(BaseModel):
+    trade_label: str
+    security_label: str
+    counterparty_label: str
     fx_conversions: list[dict] = []
     observed_settled: bool = False
     trade_id: str
@@ -189,6 +195,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             trade = trades[snapshot["trade_id"]]
             currency = snapshot["bucket"]["currency"]
             result.append(TradeView(
+                **trade_labels(trade),
                 fx_conversions=[{"sell_currency": leg["sell_currency"],
                                  "sell_amount": str(whole(leg["sell_amount_minor"], leg["sell_currency"])),
                                  "buy_currency": currency, "buy_amount": str(whole(leg["buy_amount_minor"], currency)),

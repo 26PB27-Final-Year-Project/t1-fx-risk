@@ -82,6 +82,10 @@ class GenerationConfig(Contract):
     ssi_mismatch_rate: float = Field(default=0.06, ge=0, le=1)
     funding_stress_rate: float = Field(default=0.10, ge=0, le=1)
     funding_stress_fraction: Decimal = Field(default=Decimal("0.5"), ge=0, le=1)
+    fx_early_rate: float = Field(default=0.20, ge=0, le=1)
+    fx_on_time_rate: float = Field(default=0.30, ge=0, le=1)
+    fx_missing_rate: float = Field(default=0.05, ge=0, le=1)
+    fx_late_minutes: int = Field(default=240, ge=1, le=2880)
     notional_median_minor: int = Field(default=1_000_000, ge=100, le=1_000_000_000)
     notional_log_sigma: float = Field(default=0.8, gt=0, le=3)
     observation_delay_minutes: int = Field(default=15, ge=0, le=180)
@@ -89,6 +93,8 @@ class GenerationConfig(Contract):
 
     @model_validator(mode="after")
     def coherent(self):
+        if self.fx_early_rate + self.fx_on_time_rate + self.fx_missing_rate > 1:
+            raise ValueError("FX early, on-time and missing probabilities must sum to at most one")
         if self.trade_count < self.trading_days:
             raise ValueError("Each trading day must contain at least one trade")
         if self.market.settlement_lag != 1:
@@ -283,8 +289,15 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         ))
         # Actual credit is an exogenous draw. The expected credit field never contains this draw.
         credit_rng = random_stream(config.seed, day, index, "fx_credit_delay")
-        actual_credit = expected+timedelta(minutes=float(credit_rng.lognormal(2, 0.6)))
-        if actual_credit <= end:
+        category = credit_rng.random()
+        missing = category < config.fx_missing_rate
+        if category < config.fx_missing_rate + config.fx_early_rate:
+            actual_credit = max(booked, expected-timedelta(minutes=float(credit_rng.uniform(5, 120))))
+        elif category < config.fx_missing_rate + config.fx_early_rate + config.fx_on_time_rate:
+            actual_credit = expected
+        else:
+            actual_credit = expected+timedelta(minutes=float(credit_rng.uniform(1, config.fx_late_minutes)))
+        if not missing and actual_credit <= end:
             events.append(Event(
                 event_id=f"credit:{fx_id}", event_type=EventType.FX_CREDITED, fx_leg_id=fx_id,
                 event_time=actual_credit, available_at=actual_credit,
@@ -309,7 +322,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         ) for currency, total in sorted(source_totals.items())),
         costs=config.costs,
         settlement_windows=tuple(windows),
-        assumption="Synthetic EUR equities, assumed calendar/FX conventions, securities available, fixed-0 reference policy.",
+        assumption="Synthetic cash equities with configured settlement currency, dated reference FX prices, explicit calendar/route assumptions, securities available, fixed-0 reference policy.",
     )
     return GeneratedDay(scenario, split, tuple(injections), tuple(counterparties))
 

@@ -5,6 +5,7 @@ import html
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections import defaultdict
@@ -23,8 +24,10 @@ def csv_bytes(rows):
     writer = csv.DictWriter(output, fieldnames=list(rows[0]) if rows else [])
     writer.writeheader()
     for row in rows:
-        # Treat identifiers as text even if an imported record resembles a spreadsheet formula.
-        writer.writerow({key: "'"+value if isinstance(value, str) and value.startswith(('=', '+', '-', '@'))
+        # Preserve signed decimal costs as numbers; escape formula-like identifiers only.
+        writer.writerow({key: "'"+value if isinstance(value, str)
+                         and value.startswith(('=', '+', '-', '@'))
+                         and re.fullmatch(r'[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?', value) is None
                          else value for key, value in row.items()})
     return output.getvalue().encode('utf-8-sig')
 

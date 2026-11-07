@@ -47,3 +47,13 @@ def test_experiment_distinguishes_forecast_seeds_from_data_seeds(tmp_path, datas
     assert len(report['comparisons']) == 10
     assert len({row['policy_id'] for row in report['comparisons']}) == 5
     assert all(row['test_days'] == 1 and row['forecast_repeats'] == 2 for row in report['summary'])
+
+
+def test_export_preserves_negative_cost_savings_without_allowing_formulas():
+    import io
+    from t1fx.experiments import csv_bytes
+    raw = csv_bytes([{'cost_saved': '-12.50', 'trade_id': '=1+1', 'other_id': '-1+2'}])
+    row = next(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
+    assert row['cost_saved'] == '-12.50'
+    assert row['trade_id'] == "'=1+1"
+    assert row['other_id'] == "'-1+2"

@@ -2,12 +2,13 @@
 
 Current settlement currency: **USD**. Earlier records below are historical and may describe retired EUR configurations.
 
-- Backend verification includes generated labels, calendar closure rules, mixed receipt outcomes, export integrity and FX-to-trade reference validation. The initial 96-test suite passed; subsequent checks are recorded below.
+- Backend suite: **100 passed**. Includes generated labels, calendar closure rules, mixed receipt outcomes, export integrity, numeric CSV handling and FX-to-trade reference validation. One third-party FastAPI test-client deprecation warning remains.
 - Browser acceptance suite: 15 passed; includes both themes, keyboard dropdowns, mobile/sidebar layouts, evaluation controls, readable-label search and research identifiers.
+- Saved dataset checksums validated in JSON/Parquet, both model bundles loaded, and 95 unique demo/research runs passed checksum validation. The final exported report also passed file-checksum and numeric-CSV checks.
 - TypeScript and production build passed. The bundle-size warning remains; it does not prevent the build.
 - Impeccable's mechanical design detector returned no findings for the changed frontend files; no suppressions were added.
 - Real online-clock/FX bootstrap succeeded: dataset `dataset-7f36ed1d2105ac452a32`, risk model `model-264f771bc2db62389589`, timing model `timing-b29105a08b32c849be7a`.
-- Research report: `artifacts/research/experiment-85f05fea52c726437a43/report.html`; 200 test trades on two days, three budgets (USD 0/15,000/30,000), three forecast seeds, five policies, 90 result rows.
+- Research report: `artifacts/research/experiment-f315f364880c40b2e035/report.html`; 200 test trades on two days, three budgets (USD 0/15,000/30,000), three forecast seeds, five policies, 90 result rows.
 - At USD 15,000, both LP policies averaged 14.5 missed deadlines per test day versus 15.5 without reserve. Mean replay cost rose from about USD 195.59 to USD 200.89. This small synthetic sample does **not** demonstrate cost savings or superiority of scenario funding.
 
 Reproduce the report with:

@@ -68,6 +68,7 @@ class GenerationConfig(Contract):
     start_date: date = date(2026, 10, 13)
     counterparty_count: int = Field(default=20, ge=1, le=1000)
     pool_count: int = Field(default=8, ge=1, le=100)
+    calendar_bundle: Literal["us-2026-2028"] | None = None
     market: CalendarProfile
     fx_routes: tuple[FXRouteProfile, ...] = Field(min_length=1)
     arrival_open: time = time(9, 30)
@@ -107,7 +108,8 @@ class GenerationConfig(Contract):
 
 
 def load_config(path: Path) -> GenerationConfig:
-    return GenerationConfig.model_validate_json(path.read_text())
+    from t1fx.market_data import apply_calendar_bundle
+    return apply_calendar_bundle(GenerationConfig.model_validate_json(path.read_text()))
 
 
 def random_stream(seed: int, *identity: object) -> np.random.Generator:
@@ -168,12 +170,12 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
     settlement_open = local_instant(settlement_day, config.settlement_open, market.timezone)
     decision = local_instant(settlement_day, config.decision_time, market.timezone)
     start = local_instant(day, config.arrival_open, market.timezone)
-    close = local_instant(day, config.arrival_close, market.timezone)
+    close = local_instant(day, min(config.arrival_close, market.trading_early_closes.get(day, config.arrival_close)), market.timezone)
     if not decision < settlement_open < deadline:
         raise ValueError("Early-close override is incompatible with the configured decision window")
     if close >= market.cutoff_at(day, "settlement"):
         raise ValueError("Execution window crosses the market's configured close")
-    end_day = market.advance(settlement_day, config.recovery_business_days)
+    end_day = market.advance_settlement(settlement_day, config.recovery_business_days)
     end = market.cutoff_at(end_day, "settlement")
     scenario_id = f"{config.config_id}-s{config.seed}-{day.isoformat()}"
     daily_prices = {}
@@ -297,7 +299,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         ))
         if window_day == end_day:
             break
-        window_day = market.advance(window_day, 1)
+        window_day = market.advance_settlement(window_day, 1)
     scenario = Scenario(
         scenario_id=scenario_id, starts_at=start, decision_at=decision, ends_at=end,
         trades=tuple(trades), events=tuple(events), fx_legs=tuple(legs),

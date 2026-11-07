@@ -16,6 +16,9 @@ class CalendarProfile(Contract):
     valid_from: date
     valid_to: date
     holidays: frozenset[date] = frozenset()
+    settlement_holidays: frozenset[date] = frozenset()
+    settlement_source_url: str | None = None
+    trading_early_closes: dict[date, time] = Field(default_factory=dict)
     affirmation_time: time = time(21)
     settlement_time: time = time(16)
     settlement_lag: int = Field(default=1, ge=0)
@@ -32,13 +35,13 @@ class CalendarProfile(Contract):
             raise ValueError("Cutoff clock times must be local, without an attached timezone")
         if self.classification == "sourced" and not self.source_url:
             raise ValueError("A sourced calendar needs its source URL")
-        if any(not self.valid_from <= day <= self.valid_to for day in self.holidays | self.early_closes.keys()):
+        if any(not self.valid_from <= day <= self.valid_to for day in self.holidays | self.settlement_holidays | self.early_closes.keys() | self.trading_early_closes.keys()):
             raise ValueError("Calendar overrides must lie within profile coverage")
-        if any(clock.tzinfo for clock in self.early_closes.values()):
+        if any(clock.tzinfo for clock in (*self.early_closes.values(), *self.trading_early_closes.values())):
             raise ValueError("Early-close clock times must be local and timezone-naive")
         return self
 
-    @field_serializer("holidays", when_used="json")
+    @field_serializer("holidays", "settlement_holidays", when_used="json")
     def stable_holidays(self, value):
         return [day.isoformat() for day in sorted(value)]
 
@@ -63,7 +66,20 @@ class CalendarProfile(Contract):
     def settlement_date(self, trade_date: date) -> date:
         if not self.is_business_day(trade_date):
             raise ValueError("Trade date is not a business day in this profile")
-        return self.advance(trade_date, self.settlement_lag)
+        return self.advance_settlement(trade_date, self.settlement_lag)
+
+    def is_settlement_day(self, day: date) -> bool:
+        return self.is_business_day(day) and day not in self.settlement_holidays
+
+    def advance_settlement(self, day: date, count: int) -> date:
+        self.require_coverage(day)
+        if count < 0:
+            raise ValueError("Business-day increment cannot be negative")
+        while count:
+            day += timedelta(days=1)
+            if self.is_settlement_day(day):
+                count -= 1
+        return day
 
     def cutoff_at(self, day: date, kind: str) -> datetime:
         if not self.is_business_day(day):

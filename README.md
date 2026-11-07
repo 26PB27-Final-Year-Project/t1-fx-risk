@@ -2,7 +2,7 @@
 
 A local research application for exploring why securities trades miss settlement deadlines and how funding decisions affect those outcomes. It creates synthetic trades, simulates their settlement and FX cash flows, estimates observable risk, and compares funding policies. A dashboard makes the results easy to inspect.
 
-**This is a research demo.** Its data, market rules, and costs are synthetic. It does not move money, book FX, or send settlement instructions.
+**This is a research demo.** Its trades, operational behavior, and costs are synthetic; reference FX prices and selected holiday calendars come from published sources. It does not move money, book FX, or send settlement instructions.
 
 ## Why this project exists
 
@@ -50,7 +50,13 @@ The dashboard has four views: **Trades** for individual cases, **Funding** for r
 
 Funding comparisons obtain reference rates in the settlement currency from [Frankfurter](https://frankfurter.dev/) for currencies in a scenario. The exact rates and source URLs are saved in each run and exposed at `/api/v1/runs/{run_id}/fx-rates`; recomputations reuse them. Frankfurter needs an internet connection to obtain rates for foreign funding sources. Its daily mid-market rates value results and budgets; generation also uses dated Frankfurter prices, with no fixed-price fallback. Source amounts are rounded up to the funding currency’s minor unit. Each generated FX leg saves its quote, observation date and source URL. Generation uses the preceding date’s published reference to avoid same-day publication lookahead. These are daily reference prices, not executable intraday quotes.
 
-The default research generator includes USD, CAD, GBP, JPY, and INR funding routes into USD settlement pools. The Funding page shows the saved reference value for each currency used by a run. Generated settlement trades and funding budgets use USD. Retrain risk and timing models on the new dataset; old model bundles describe the previous feature schema and FX routes.
+The default research generator includes EUR, CAD, GBP, JPY, and INR funding routes into USD settlement pools. The Funding page shows the saved reference value for each currency used by a run. Generated settlement trades and funding budgets use USD. Retrain risk and timing models on the new dataset; old model bundles describe the previous feature schema and FX routes.
+
+## Calendar coverage and data sources
+
+The default configuration pins a **2026–2028** calendar snapshot from [NYSE](https://www.nyse.com/trade/hours-calendars), [Federal Reserve Financial Services](https://www.frbservices.org/about/holiday-schedules/), and [ECB/TARGET](https://www.ecb.europa.eu/ecb/contacts/working-hours/html/index.en.html). NYSE early closes shorten the generated trading session; they do not change the assumed settlement cutoff. The simulated securities settlement calendar excludes both exchange and USD payment holidays. This is a documented research approximation, not a complete DTC rulebook.
+
+USD and EUR payment holidays are sourced. CAD, GBP, JPY, and INR calendars, route lags, booking cutoffs, and settlement windows remain explicit scenario assumptions. Dates outside coverage fail instead of inventing holidays. FX reference prices use the online API described above; holidays use versioned official snapshots because a general public-holiday API is not a settlement calendar. Saved dataset configuration includes the dates and source URLs needed to reproduce a run.
 
 ## Generate research data
 

@@ -1,6 +1,6 @@
 """Prepare the complete local research workflow with chronologically separate training."""
 
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 from t1fx.datasets import generate_release
@@ -18,18 +18,12 @@ def bootstrap_demo(root: Path, trade_count=50, seed=42, budget_minor=3_000_000):
     first = today.replace(day=1)
     training_start = first - timedelta(days=180)
     config = load_config(Path('configs/generation/smoke.json'))
-    coverage = {'valid_from': date(training_start.year, 1, 1),
-                'valid_to': date(today.year+1, 12, 31)}
-    market = config.market.model_copy(update=coverage)
+    market = config.market
     while not market.is_business_day(training_start):
         training_start += timedelta(days=1)
-    routes = tuple(route.model_copy(update={
-        'sell_calendar': route.sell_calendar.model_copy(update=coverage),
-        'buy_calendar': route.buy_calendar.model_copy(update=coverage),
-    }) for route in config.fx_routes)
     config = config.model_copy(update={
         'config_id': f'usd-training-{first:%Y-%m}', 'start_date': training_start,
-        'seed': seed, 'market': market, 'fx_routes': routes,
+        'seed': seed,
     })
     dataset = generate_release(config, root, 'auto')
     risk = train_model(root, dataset['dataset_id'])

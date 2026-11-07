@@ -95,12 +95,7 @@ def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario
     month = month or first
     config = load_config(Path("configs/generation/smoke.json")).model_copy(update={"seed": seed})
     year = month.year
-    market = config.market.model_copy(update={"valid_from": date(year, 1, 1), "valid_to": date(year+1, 12, 31)})
-    routes = tuple(route.model_copy(update={
-        "sell_calendar": route.sell_calendar.model_copy(update={"valid_from": date(year, 1, 1), "valid_to": date(year+1, 12, 31)}),
-        "buy_calendar": route.buy_calendar.model_copy(update={"valid_from": date(year, 1, 1), "valid_to": date(year+1, 12, 31)}),
-    }) for route in config.fx_routes)
-    config = config.model_copy(update={"market": market, "fx_routes": routes})
+    market = config.market
     days = [date(year, month.month, day) for day in range(1, calendar.monthrange(year, month.month)[1]+1)
             if market.is_business_day(date(year, month.month, day))]
     if rolling:

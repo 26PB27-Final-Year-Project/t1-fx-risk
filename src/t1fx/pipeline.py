@@ -3,7 +3,7 @@
 import hashlib
 import importlib.metadata
 import platform
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -41,7 +41,7 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
     currencies = set(settlement_currencies)
     currencies.update(source.currency for source in scenario.funding_sources)
     fx_rate_snapshot = fx_rate_snapshot or fetch_rates(currencies, min(
-        scenario.decision_at.date(), date.today(),
+        scenario.decision_at.date() - timedelta(days=1), date.today() - timedelta(days=1),
     ), base_currency=base_currency)
     if fx_rate_snapshot["base_currency"] != base_currency:
         raise ValueError("Saved rates disagree with settlement currency")
@@ -147,6 +147,8 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
         if timing_model_id is not None:
             metadata["timing_model_id"] = timing_model_id
             metadata["scenario_seed"] = scenario_seed
+        metadata["scenario_count"] = scenario_count
+        metadata["common_shock_weight"] = common_shock_weight
         run_id = store.publish(artifacts, metadata)
         reports.append({"run_id": run_id, "policy_id": plan.policy_id, **metrics})
     return {"scenario_id": scenario.scenario_id, "runs": reports}

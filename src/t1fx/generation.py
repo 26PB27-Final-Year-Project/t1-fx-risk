@@ -127,7 +127,38 @@ class GeneratedDay:
 
 def reference_snapshot(currencies, day, base):
     from t1fx.fx_rates import fetch_rates
-    return fetch_rates(set(currencies), day, base)
+    import json
+    import os
+    import tempfile
+    from t1fx.fx_rates import valuation_rates
+    from t1fx.storage import canonical_bytes, digest
+    key = digest({"currencies": sorted(currencies), "date": day.isoformat(), "base": base})
+    cache = Path("artifacts/fx_cache")
+    path = cache / (key + ".json")
+    if path.exists():
+        envelope = json.loads(path.read_text())
+        snapshot = envelope["snapshot"]
+        if digest(snapshot) != envelope["checksum"]:
+            raise ValueError("Cached FX quote checksum mismatch")
+        valuation_rates(snapshot, set(currencies))
+        return snapshot
+    for attempt in range(3):
+        try:
+            snapshot = fetch_rates(set(currencies), day, base)
+            break
+        except ValueError:
+            if attempt == 2:
+                raise
+    cache.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=cache, prefix=".quote-")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(canonical_bytes({"snapshot": snapshot, "checksum": digest(snapshot)}))
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return snapshot
 
 
 def generate_day(config: GenerationConfig, day: date, count: int, split: str) -> GeneratedDay:
@@ -243,7 +274,7 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         source_totals[route.sell_currency] = source_totals.get(route.sell_currency, 0) + sell_amount
         fx_id = f"{trade_id}:FX"
         legs.append(FXLeg(
-            fx_leg_id=fx_id, bucket=bucket, buy_amount_minor=amount,
+            fx_leg_id=fx_id, trade_id=trade_id, bucket=bucket, buy_amount_minor=amount,
             sell_currency=route.sell_currency, sell_amount_minor=sell_amount,
             funding_source_id=f"SOURCE-{route.sell_currency}", booked_at=booked, available_at=booked,
             expected_credit_at=expected, pricing=quote | {"source": snapshot["source"], "base_currency": route.buy_currency},

@@ -468,3 +468,8 @@ input { caret-color: var(--primary); }
 
 .reading-guide details { border: 0; padding: 0; background: transparent; }
 .reading-guide summary { text-transform: none; }
+
+.evaluation-date-group, .evaluation-zone-group { flex: 1; min-width: min(100%, 280px); padding: 18px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+.evaluation-date-fields { display: flex; flex-wrap: wrap; gap: 16px; }
+.evaluation-date-group h3, .evaluation-zone-group h3 { margin: 0 0 4px; }
+.evaluation-date-group p, .evaluation-zone-group p { color: var(--muted-foreground); font-size: .8125rem; margin: 0 0 16px; }

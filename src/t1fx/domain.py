@@ -82,6 +82,7 @@ class FundingSource(Contract):
 
 class FXLeg(Contract):
     pricing: dict | None = None
+    trade_id: str | None = None
     fx_leg_id: str
     bucket: Bucket
     buy_amount_minor: PositiveMinor
@@ -96,6 +97,14 @@ class FXLeg(Contract):
     def chronology(self):
         if self.available_at < self.booked_at or self.expected_credit_at < self.booked_at:
             raise ValueError("FX observation/expected receipt cannot precede booking")
+        if self.pricing is not None:
+            from datetime import date
+            rate = Decimal(str(self.pricing.get("rate_base", self.pricing.get("rate_usd", "NaN"))))
+            if (not rate.is_finite() or rate <= 0
+                    or self.pricing.get("currency") != self.sell_currency
+                    or self.pricing.get("base_currency") != self.bucket.currency
+                    or date.fromisoformat(self.pricing["observed_date"]) >= self.booked_at.date()):
+                raise ValueError("FX pricing must match currencies and predate booking")
         if self.sell_currency == self.bucket.currency:
             raise ValueError("FX leg must exchange different currencies")
         return self

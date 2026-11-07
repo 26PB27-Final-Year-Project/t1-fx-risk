@@ -14,7 +14,7 @@ from t1fx.training import train_model
 
 def bootstrap_demo(root: Path, trade_count=50, seed=42, budget_minor=3_000_000):
     scenario = demo_scenario(trade_count, seed)
-    today = date.today()
+    today = scenario.decision_at.date()
     first = today.replace(day=1)
     training_start = first - timedelta(days=180)
     config = load_config(Path('configs/generation/smoke.json'))
@@ -28,7 +28,7 @@ def bootstrap_demo(root: Path, trade_count=50, seed=42, budget_minor=3_000_000):
         'buy_calendar': route.buy_calendar.model_copy(update=coverage),
     }) for route in config.fx_routes)
     config = config.model_copy(update={
-        'config_id': f'eur-training-{first:%Y-%m}', 'start_date': training_start,
+        'config_id': f'usd-training-{first:%Y-%m}', 'start_date': training_start,
         'seed': seed, 'market': market, 'fx_routes': routes,
     })
     dataset = generate_release(config, root, 'auto')

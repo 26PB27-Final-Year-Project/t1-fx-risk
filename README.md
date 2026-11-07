@@ -8,7 +8,7 @@ A local research application for exploring why securities trades miss settlement
 
 A securities purchase creates an obligation to pay by a deadline. Under T+1, settlement is due on the next eligible business day. A trade can miss that deadline because its instructions are incomplete, its settlement details disagree, or the required cash arrives late. A funding team must decide where to place a limited cash reserve before those failures occur.
 
-This project recreates that decision in a controlled experiment. For example, a trade owes EUR 10,000 tomorrow, but its incoming FX cash may arrive late. The simulator records what the operator knew at the decision time, the risk model estimates failure under a reference funding policy, and the optimizer proposes reserve allocations. The simulator then replays the outcome for each policy so you can compare failures and costs.
+This project recreates that decision in a controlled experiment. For example, a trade owes USD 10,000 tomorrow, but its incoming FX cash may arrive late. The simulator records what the operator knew at the decision time, the risk model estimates failure under a reference funding policy, and the optimizer proposes reserve allocations. The simulator then replays the outcome for each policy so you can compare failures and costs.
 
 It is useful for learning settlement operations and researching whether forecasts improve funding decisions. The generated trades and outcomes are synthetic. Online exchange rates provide dated valuation references; they do not make this a live trading system.
 
@@ -44,7 +44,7 @@ Start the app and worker in separate terminals:
 .venv/bin/python -m t1fx.cli worker
 ```
 
-Open **<http://127.0.0.1:8000/>** for the dashboard or **<http://127.0.0.1:8000/docs>** for the API. If a saved URL still opens an older run, return to the root URL or select the current monthly EUR demo in **Simulation run**.
+Open **<http://127.0.0.1:8000/>** for the dashboard or **<http://127.0.0.1:8000/docs>** for the API. If a saved URL still opens an older run, return to the root URL or select the current rolling USD demo in **Simulation run**.
 
 The dashboard has four views: **Trades** for individual cases, **Funding** for reserves and budget changes, **Scenarios** for policy comparisons, and **Model health** for trained-model reports. Recomputing funding requires the worker process.
 
@@ -67,7 +67,7 @@ The generator prints `DATASET_ID`; training prints model IDs. The smoke configur
 
 ## First walkthrough: what to inspect
 
-1. Open **Trades**, select the trailing-30-day EUR run, and expand the monthly schedule. The schedule contains 50 trades; the watchlist only shows trades executed by the selected evaluation time. Fewer visible rows early in the month are expected.
+1. Open **Trades**, select the trailing-30-day USD run, and expand the monthly schedule. The schedule contains 50 trades; the watchlist only shows trades executed by the selected evaluation time. Fewer visible rows early in the month are expected.
 2. Select an available probability model. Open a trade to inspect its instruction state, settlement details, cash observations, deadline, and model explanation. A probability is an estimate, not a guarantee. Settled or expired trades may show **Not applicable**.
 3. Open **Funding**, select the empirical timing model, set a budget such as USD 15,000, and submit a recomputation. Keep the worker terminal running. Wait for the job to complete and select its resulting run.
 4. Open **Scenarios** and compare the five policies from the same comparison. Record failures, failed notional, funding allocations, and realised costs. Equal results are possible when instruction problems or late receipts dominate the experiment.
@@ -145,7 +145,7 @@ Validate your own generated outputs using IDs printed by bootstrap (replace the 
 
 The quick `demo` skips training and produces four policies. `bootstrap` executes the implemented training and five-policy workflow. Neither command automatically completes a publishable research study.
 
-For a study, generate multiple seeds and larger day cohorts, train only on historical partitions, and evaluate on untouched later scenarios. Use the same scenario, budget, rates and forecast settings across policy comparisons. Keep each generated configuration and manifest. Replaying saved scenarios is more reproducible than relying on the monthly demo, whose dates change with the current month.
+For a study, generate multiple seeds and larger day cohorts, train only on historical partitions, and evaluate on untouched later scenarios. Use the same scenario, budget, rates and forecast settings across policy comparisons. Keep each generated configuration and manifest. Replaying saved scenarios is more reproducible than relying on the rolling demo, whose dates change each day.
 
 Report risk PR-AUC (average precision), ROC-AUC, Brier score, log loss and reliability; report timing Brier score/reliability; report funding failures, exposure, costs and budget use. Brier score and log loss are better when lower. AUC metrics are better when higher but do not demonstrate calibration. Report uncertainty by scenario day rather than treating snapshots of one trade as independent observations. The default smoke dataset has only two final test days, which is insufficient for strong generalization claims.
 
@@ -203,4 +203,13 @@ See the [review findings and verification record](docs/review.md) for priorities
 - [Implementation status and limitations](docs/implementation-status.md)
 - [Architecture and design decisions](docs/architecture.md)
 
-The current implementation is designed for one local operator. Generated settlement uses EUR, securities availability is assumed, and model results on synthetic data do not establish real-world accuracy.
+The current implementation is designed for one local operator. Generated settlement uses USD, securities availability is assumed, and model results on synthetic data do not establish real-world accuracy.
+
+
+### Evaluation and rate reproducibility
+
+Trade evaluation date/time and timezone have separate controls. The timezone determines how the entered wall-clock time is interpreted. Generation anchors the rolling window to online time in New York; small samples spread across that window. New replays preserve scenario seed, count and common-shock weight. Older runs that did not save these fields use defaults.
+
+New valuation snapshots use the preceding calendar date to avoid using a rate from later on the evaluation day. This is a conservative daily-date policy; the provider does not supply publication timestamps. Historical generation quotes are checksummed and cached under `artifacts/fx_cache/`, with three attempts on provider failure. To reproduce a study, retain saved scenarios and quotes.
+
+Remaining research extensions: authoritative holiday and currency-route calendars, richer early/on-time/late receipt distributions, larger independent test cohorts, rolling treasury balances, learned timing dependence, multi-seed study exports and authenticated shared deployment. These require declared experiment designs and external validation; passing software tests does not establish market realism.

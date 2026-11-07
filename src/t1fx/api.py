@@ -180,7 +180,9 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         return store.manifest(run_id)
 
     def trade_rows(run_id):
-        trades = {t["trade_id"]: t for t in store.read(run_id, "scenario.json")["trades"]}
+        scenario = store.read(run_id, "scenario.json")
+        as_of = datetime.fromisoformat(store.manifest(run_id)["decision_at"])
+        trades = {t["trade_id"]: t for t in scenario["trades"]}
         scores = {p["trade_id"]: p for p in store.read(run_id, "predictions.json")}
         result = []
         for snapshot in store.read(run_id, "snapshots.json"):
@@ -191,9 +193,11 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                                  "sell_amount": str(whole(leg["sell_amount_minor"], leg["sell_currency"])),
                                  "buy_currency": currency, "buy_amount": str(whole(leg["buy_amount_minor"], currency)),
                                  "pricing": leg.get("pricing")}
-                                for leg in store.read(run_id, "scenario.json")["fx_legs"]
-                                if leg["fx_leg_id"] == trade["trade_id"] + ":FX"
-                                and datetime.fromisoformat(leg["available_at"]) <= datetime.fromisoformat(store.manifest(run_id)["decision_at"])],
+                                for leg in scenario["fx_legs"]
+                                if (leg.get("trade_id") == trade["trade_id"] or
+                                    (not leg.get("trade_id") and leg["bucket"] == trade["bucket"]))
+                                and datetime.fromisoformat(leg["available_at"]) <= as_of
+                                and datetime.fromisoformat(leg["booked_at"]) <= as_of],
                 trade_id=trade["trade_id"], counterparty_id=trade["counterparty_id"],
                 cash_pool_id=snapshot["bucket"]["cash_pool_id"], currency=currency,
                 settlement_amount=str(whole(trade["settlement_amount_minor"], currency)),
@@ -326,7 +330,9 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
     @app.get("/api/v1/runs/{run_id}/evaluation-context")
     def evaluation_context(run_id: str):
         scenario = store.read(run_id, "scenario.json")
-        return {"starts_at": scenario["starts_at"], "ends_at": scenario["ends_at"],
+        manifest = store.manifest(run_id)
+        return {"replay_settings": {key: manifest[key] for key in ("scenario_seed", "scenario_count", "common_shock_weight", "timing_model_id") if key in manifest},
+                "starts_at": scenario["starts_at"], "ends_at": scenario["ends_at"],
                 "trades": [{"trade_id": t["trade_id"], "executed_at": t["executed_at"],
                             "deadline_at": t["contractual_deadline_at"],
                             "currency": t["bucket"]["currency"]} for t in scenario["trades"]]}

@@ -71,11 +71,17 @@ def three_trade_scenario() -> Scenario:
     )
 
 
+def current_utc():
+    from t1fx.online_clock import online_time
+    return datetime.fromisoformat(online_time()["utc_now"])
+
+
 def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario:
     """A trailing 30-day schedule; explicit month remains available for research replay."""
     import calendar
     from datetime import date, timedelta, time
     from pathlib import Path
+    from zoneinfo import ZoneInfo
 
     from t1fx.generation import generate_day, load_config
     from t1fx.calendars import local_instant
@@ -83,7 +89,8 @@ def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario
     if trade_count < 3 or trade_count > 100:
         raise ValueError("Demo trade count must be between 3 and 100")
     rolling = month is None
-    today = date.today()
+    now = current_utc()
+    today = now.astimezone(ZoneInfo("America/New_York")).date()
     first = today - timedelta(days=29)
     month = month or first
     config = load_config(Path("configs/generation/smoke.json")).model_copy(update={"seed": seed})
@@ -99,7 +106,8 @@ def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario
     if rolling:
         days = [first + timedelta(days=i) for i in range(30)
                 if market.is_business_day(first + timedelta(days=i))]
-    days = days[:trade_count]
+    if len(days) > trade_count:
+        days = [days[round(i * (len(days)-1) / (trade_count-1))] for i in range(trade_count)]
     combined = None
     windows = {}
     scenario_id = f"demo-{trade_count}-s{seed}-usd-{month:%Y-%m}" + (f"-30d-{today}" if rolling else "")
@@ -134,5 +142,5 @@ def demo_scenario(trade_count: int = 50, seed: int = 42, month=None) -> Scenario
     combined["assumption"] = "Synthetic USD business-day schedule; observations respect execution time. Daily cash pools are isolated."
     start = datetime.fromisoformat(combined["starts_at"].replace("Z", "+00:00"))
     end = datetime.fromisoformat(combined["ends_at"].replace("Z", "+00:00"))
-    combined["decision_at"] = max(start, min(local_instant(date.today(), config.decision_time, market.timezone), end-timedelta(seconds=1))).isoformat()
+    combined["decision_at"] = max(start, min(now, end-timedelta(seconds=1))).isoformat()
     return Scenario.model_validate(combined)

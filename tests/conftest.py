@@ -20,6 +20,7 @@ def offline_comparison_rates(monkeypatch):
     monkeypatch.setattr("t1fx.pipeline.fetch_rates", rates)
     monkeypatch.setattr("t1fx.fx_rates.fetch_rates", rates)
     from datetime import UTC, datetime
+    monkeypatch.setattr("t1fx.fixtures.current_utc", lambda: datetime.now(UTC))
     monkeypatch.setattr("t1fx.api.online_time", lambda: {
         'utc_now': datetime.now(UTC).isoformat(), 'source': 'test://online-clock',
         'synchronized_at': datetime.now(UTC).isoformat(), 'stale': False,

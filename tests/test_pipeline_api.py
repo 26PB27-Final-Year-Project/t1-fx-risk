@@ -16,8 +16,11 @@ def test_eur_demo_uses_all_funding_currencies_and_eur_budget(tmp_path):
     from t1fx.fixtures import demo_scenario
 
     scenario = demo_scenario()
-    from datetime import date, timedelta
-    assert all(date.today()-timedelta(days=29) <= trade.executed_at.date() <= date.today()
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from t1fx.fixtures import current_utc
+    today = current_utc().astimezone(ZoneInfo("America/New_York")).date()
+    assert all(today-timedelta(days=29) <= trade.executed_at.date() <= today
                for trade in scenario.trades)
     assert len({trade.executed_at.date() for trade in scenario.trades}) > 10
     assert {trade.bucket.currency for trade in scenario.trades} == {"USD"}
@@ -180,3 +183,14 @@ def test_watchlist_currency_matches_funding_and_preserves_original_amount(tmp_pa
         assert all(row["currency"] == currency or any(fx["sell_currency"] == currency for fx in row["fx_conversions"]) for row in rows)
         assert all(Decimal(row["settlement_amount"]) > 0 for row in rows)
     assert any(row["observed_settled"] and Decimal(row["remaining_obligation"]) == 0 for row in page["items"])
+
+
+def test_small_demo_spans_window_and_decision_never_exceeds_online_time(monkeypatch):
+    from datetime import datetime
+    from t1fx.fixtures import demo_scenario
+    now = datetime.fromisoformat('2026-11-06T01:00:00+00:00')
+    monkeypatch.setattr('t1fx.fixtures.current_utc', lambda: now)
+    scenario = demo_scenario(3)
+    assert scenario.decision_at <= now
+    assert (max(t.executed_at for t in scenario.trades) - min(t.executed_at for t in scenario.trades)).days >= 27
+    assert all(leg.trade_id in {trade.trade_id for trade in scenario.trades} for leg in scenario.fx_legs)

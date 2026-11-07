@@ -19,7 +19,7 @@ from t1fx.table_contracts import TABLES, read_parquet
 @pytest.fixture
 def config():
     original = load_config(Path("configs/generation/smoke.json"))
-    return GenerationConfig.model_validate(original.model_dump() | {"trade_count": 80, "trading_days": 4})
+    return GenerationConfig.model_validate(original.model_dump() | {"trade_count": 80, "trading_days": 4, "start_date": date(2026, 10, 13)})
 
 
 def test_seeded_generation_is_reproducible_and_changes_with_seed(config):

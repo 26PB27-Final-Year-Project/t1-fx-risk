@@ -177,6 +177,8 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
     decision = local_instant(settlement_day, config.decision_time, market.timezone)
     start = local_instant(day, config.arrival_open, market.timezone)
     close = local_instant(day, min(config.arrival_close, market.trading_early_closes.get(day, config.arrival_close)), market.timezone)
+    if close <= start:
+        raise ValueError("Trading close must be after the execution window opens")
     if not decision < settlement_open < deadline:
         raise ValueError("Early-close override is incompatible with the configured decision window")
     if close >= market.cutoff_at(day, "settlement"):

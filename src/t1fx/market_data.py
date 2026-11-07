@@ -29,7 +29,7 @@ def apply_calendar_bundle(config):
     if config.calendar_bundle != 'us-2026-2028':
         return config
     coverage = {'valid_from': date(2026, 1, 1), 'valid_to': date(2028, 12, 31)}
-    market = config.market.model_copy(update={**coverage, 'holidays': dates(NYSE),
+    market = config.market.model_copy(update={**coverage, 'profile_id': 'us-equity-calendar-2026-2028', 'holidays': dates(NYSE),
         'settlement_holidays': dates(USD), 'source_url': NYSE_SOURCE,
         'settlement_source_url': USD_SOURCE,
         'trading_early_closes': {d: time(13) for d in dates(EARLY)}})
@@ -40,6 +40,7 @@ def apply_calendar_bundle(config):
             calendar = getattr(route, side + '_calendar')
             if currency in ('USD', 'EUR'):
                 calendar = calendar.model_copy(update={**coverage,
+                    'profile_id': currency.lower() + '-payment-official-2026-2028',
                     'holidays': dates(USD if currency == 'USD' else EUR),
                     'classification': 'sourced', 'source_url': USD_SOURCE if currency == 'USD' else EUR_SOURCE})
             calendars[side + '_calendar'] = calendar

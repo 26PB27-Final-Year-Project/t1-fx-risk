@@ -143,8 +143,10 @@ def test_model_api_and_cli(trained, capsys):
     replay = run_comparison(scenario, 100000, RunStore(root))
     eligible = client.get('/api/v1/models', params={'run_id': replay['runs'][0]['run_id']})
     assert result['model_id'] in {item['model_id'] for item in eligible.json()['items']}
-    from t1fx.fixtures import three_trade_scenario
-    legacy = run_comparison(three_trade_scenario(), 100000, RunStore(root))
+    # A training-period run predates calibration regardless of the configured start date.
+    early = next(r for r in tables['snapshots'] if r['split'] == 'train')
+    early_path = root/'datasets'/dataset['dataset_id']/'scenarios'/f"{early['scenario_id']}.json"
+    legacy = run_comparison(Scenario.model_validate_json(early_path.read_text()), 100000, RunStore(root))
     assert client.get('/api/v1/models', params={'run_id': legacy['runs'][0]['run_id']}).json()['items'] == []
     incompatible = client.get(f"/api/v1/runs/{legacy['runs'][0]['run_id']}/model-predictions",
                               params={'model_id': result['model_id']})

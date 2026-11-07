@@ -220,6 +220,10 @@ class Scenario(Contract):
                     raise ValueError("Trade deadline is outside its settlement windows")
         committed: dict[str, int] = {}
         for leg in self.fx_legs:
+            if leg.trade_id is not None:
+                linked_trade = trades.get(leg.trade_id)
+                if linked_trade is None or linked_trade.bucket != leg.bucket:
+                    raise ValueError("FX trade reference must identify a trade in the same cash pool and currency")
             source = sources.get(leg.funding_source_id)
             if source is None or source.currency != leg.sell_currency:
                 raise ValueError("FX receipt requires a matching source-currency commitment")

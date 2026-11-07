@@ -38,3 +38,28 @@ def test_receipt_probabilities_reject_invalid_total():
     config = load_config(Path('configs/generation/smoke.json'))
     with pytest.raises(ValueError, match='probabilities'):
         GenerationConfig.model_validate(config.model_dump() | {'fx_early_rate': 1, 'fx_on_time_rate': 1})
+
+
+def test_generation_rejects_close_before_execution_open():
+    import pytest
+    config = load_config(Path('configs/generation/smoke.json'))
+    config = config.model_copy(update={'market': config.market.model_copy(update={
+        'trading_early_closes': {config.start_date: time(9)},
+    })})
+    with pytest.raises(ValueError, match='Trading close'):
+        generate_day(config, config.start_date, 10, 'test')
+
+
+def test_fx_trade_references_reject_unknown_or_different_pool():
+    import pytest
+    from t1fx.domain import Scenario
+    config = load_config(Path('configs/generation/smoke.json'))
+    scenario = generate_day(config, config.start_date, 20, 'test').scenario
+    data = scenario.model_dump(mode='json')
+    data['fx_legs'][0]['trade_id'] = 'missing-trade'
+    with pytest.raises(ValueError, match='FX trade reference'):
+        Scenario.model_validate(data)
+    other = next(trade for trade in scenario.trades if trade.bucket != scenario.fx_legs[0].bucket)
+    data['fx_legs'][0]['trade_id'] = other.trade_id
+    with pytest.raises(ValueError, match='FX trade reference'):
+        Scenario.model_validate(data)

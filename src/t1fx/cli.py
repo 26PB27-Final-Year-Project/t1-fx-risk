@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -51,6 +52,7 @@ def main(argv=None):
     validate.add_argument("--run", required=True)
     generate = sub.add_parser("generate", help="Build a seeded, partitioned research dataset")
     generate.add_argument("--config", type=Path, default=Path("configs/generation/smoke.json"))
+    generate.add_argument("--start-date", type=date.fromisoformat, help="First trading date (YYYY-MM-DD); leave time for all partitions and recovery gaps")
     generate.add_argument("--seed", type=int)
     generate.add_argument("--trades", type=int)
     generate.add_argument("--format", choices=("auto", "json", "both"), default="auto")
@@ -130,6 +132,8 @@ def main(argv=None):
         try:
             if args.command == "generate":
                 config_data = load_config(args.config).model_dump()
+                if args.start_date is not None:
+                    config_data["start_date"] = args.start_date
                 if args.seed is not None:
                     config_data["seed"] = args.seed
                 if args.trades is not None:

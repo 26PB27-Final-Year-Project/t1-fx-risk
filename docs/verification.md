@@ -2,7 +2,7 @@
 
 Current settlement currency: **USD**. Earlier records below are historical and may describe retired EUR configurations.
 
-- Backend suite: 96 tests passed, followed by a passing targeted run containing the additional generated-label API test (97 tests now collected).
+- Backend verification includes generated labels, calendar closure rules, mixed receipt outcomes, export integrity and FX-to-trade reference validation. The initial 96-test suite passed; subsequent checks are recorded below.
 - Browser acceptance suite: 15 passed; includes both themes, keyboard dropdowns, mobile/sidebar layouts, evaluation controls, readable-label search and research identifiers.
 - TypeScript and production build passed. The bundle-size warning remains; it does not prevent the build.
 - Impeccable's mechanical design detector returned no findings for the changed frontend files; no suppressions were added.
@@ -17,6 +17,8 @@ Reproduce the report with:
 ```
 
 Generated artifacts are ignored by Git; these IDs refer to this local workspace. After checking out elsewhere, run bootstrap and use the new IDs it prints. Software changes can produce different content-addressed IDs.
+
+Additional setup hardening: the default smoke dataset now starts on 6 July 2026 and completed generation with real FX prices in JSON and Parquet (`dataset-205ad16dcc959c220dce`). Its final test labels mature on 14 August 2026. The CLI accepts `generate --start-date YYYY-MM-DD`; linked FX receipts reject unknown trades and mismatched cash pools. A model-eligibility test now uses a training-period run instead of assuming that a fixed October fixture always predates calibration.
 
 ---
 

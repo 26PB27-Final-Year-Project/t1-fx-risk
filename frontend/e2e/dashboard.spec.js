@@ -253,3 +253,21 @@ test('online date caps the calendar and deadlines use hours or days', async ({pa
   await expect(page.locator('.deadline').first()).toContainText(/h|d/);
   for (const value of await page.locator('.deadline').allTextContents()) expect(value).not.toContain('min');
 });
+
+test('readable trade aliases can be searched while research IDs stay available', async ({page}) => {
+  await page.route('**/api/v1/runs/*/trades?*', async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.items = payload.items.map(t => ({...t, trade_label: `Trade example · ${t.trade_id}`, security_label: 'Sample equity 12', counterparty_label: 'Sample counterparty 8'}));
+    await route.fulfill({response, json: payload});
+  });
+  await page.goto('/');
+  const trade = page.getByRole('button', {name:'Trade example · T-FX-GAP', exact:true});
+  await expect(trade).toBeVisible();
+  await page.getByRole('textbox', {name:'Search this page'}).fill('Sample equity 12');
+  await expect(page.locator('tbody tr')).toHaveCount(3);
+  await trade.click();
+  await page.getByText('Research identifiers', {exact:true}).click();
+  await expect(page.locator('.technical-details code').first()).toHaveText('T-FX-GAP');
+  await expect(page.getByText('Several trades can share a cash pool.', {exact:false})).toBeVisible();
+});

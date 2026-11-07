@@ -1,5 +1,13 @@
 # Implementation status and assumptions
 
+## Completed milestone additions — 8 November 2026
+
+- Pinned NYSE trading sessions, USD payment holidays and EUR TARGET closures for 2026–2028. Trading early closes are separate from settlement cutoffs; other funding-currency holidays and route conventions remain assumptions.
+- Configurable early, on-time, delayed and unresolved receipts. Rates are declared synthetic assumptions; future receipt draws remain outside observable features.
+- Beginner trade aliases, payment summaries, searchable identifiers, shared-pool explanations and clearer settlement status in the watchlist.
+- `experiment` CLI compares held-out test days over budget and forecast-seed grids, checks timing-model chronology, and publishes CSV/HTML/JSON evidence with checksums.
+- A live verification generated 1,000 training/evaluation trades, trained both models, rebuilt the 50-trade rolling demo, and exported 90 policy rows on two held-out days. Two days are insufficient for a robust research conclusion; no performance superiority is claimed.
+
 ## Completed in the first milestone
 
 - Typed contracts reject naive timestamps, fractional minor-unit amounts, duplicate identities, unfunded FX sources, and invalid event references.

@@ -194,3 +194,17 @@ def test_small_demo_spans_window_and_decision_never_exceeds_online_time(monkeypa
     assert scenario.decision_at <= now
     assert (max(t.executed_at for t in scenario.trades) - min(t.executed_at for t in scenario.trades)).days >= 27
     assert all(leg.trade_id in {trade.trade_id for trade in scenario.trades} for leg in scenario.fx_legs)
+
+
+def test_generated_watchlist_has_readable_labels_and_retains_research_ids(tmp_path):
+    from pathlib import Path
+    from t1fx.generation import generate_day, load_config
+    config = load_config(Path('configs/generation/smoke.json'))
+    scenario = generate_day(config, config.start_date, 10, 'test').scenario
+    report = run_comparison(scenario, 0, RunStore(tmp_path))
+    client = TestClient(create_app(tmp_path))
+    items = client.get(f"/api/v1/runs/{report['runs'][0]['run_id']}/trades").json()['items']
+    assert len(items) == 10
+    assert all(t['trade_label'].startswith('Trade ') and t['security_label'].startswith('Sample equity ') for t in items)
+    assert {t['trade_id'] for t in items} == {t.trade_id for t in scenario.trades}
+    assert all(t['counterparty_label'].startswith('Sample counterparty ') for t in items)

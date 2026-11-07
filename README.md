@@ -184,7 +184,7 @@ Keep generated data out of Git. Reusing the same inputs can reuse identical cont
 
 ## Scope and remaining work
 
-Implemented: synthetic event simulation, dataset generation, calibrated risk models, SHAP, empirical timing forecasts, five funding policies, persistent results, local API/dashboard and background recomputation.
+Implemented: synthetic event simulation, dataset generation, calibrated risk models, SHAP, empirical timing forecasts, five funding policies, persistent results, local API/dashboard, background recomputation, sourced US/EUR holiday snapshots, varied receipt timing and held-out policy exports.
 
 Remaining: validation on actual settlement data, a larger repeated experimental study, a separately calibrated timing classifier, fitted dependence, rolling treasury accounting, securities inventory/partial settlement/netting, external bank integration, and shared-host authentication/deployment. The current system assumes securities are available and models independent daily cash episodes. It is appropriate as a local final-year research prototype; a completion percentage requires an agreed list of assessed objectives.
 
@@ -218,4 +218,26 @@ Trade evaluation date/time and timezone have separate controls. The timezone det
 
 New valuation snapshots use the preceding calendar date to avoid using a rate from later on the evaluation day. This is a conservative daily-date policy; the provider does not supply publication timestamps. Historical generation quotes are checksummed and cached under `artifacts/fx_cache/`, with three attempts on provider failure. To reproduce a study, retain saved scenarios and quotes.
 
-Remaining research extensions: authoritative holiday and currency-route calendars, richer early/on-time/late receipt distributions, larger independent test cohorts, rolling treasury balances, learned timing dependence, multi-seed study exports and authenticated shared deployment. These require declared experiment designs and external validation; passing software tests does not establish market realism.
+Remaining research extensions: authoritative calendars for the remaining funding currencies and validated route conventions, larger independent test cohorts, rolling treasury balances, learned timing dependence, statistical policy-study intervals and authenticated shared deployment. These require declared experiment designs and external validation; passing software tests does not establish market realism.
+
+Generated trade rows use short labels such as **Trade 1 · 2026-10-13**, **Sample equity 15**, and **Sample counterparty 8**. These are fictional display aliases, not real companies. Open a trade for a payment summary and expand **Research identifiers** for its canonical IDs. Search accepts both the readable labels and original IDs. Cash pools are shared; a pool balance is not a separate allocation to each trade.
+
+## Export presentation evidence
+
+After generating a dataset, run a matched policy experiment on its **test partition only**:
+
+```sh
+.venv/bin/python -m t1fx.cli experiment --dataset DATASET_ID --budgets 0 15000 30000
+# Add the trained timing model to compare five policies and repeated forecast draws:
+.venv/bin/python -m t1fx.cli experiment --dataset DATASET_ID --budgets 0 15000 30000 --timing-model TIMING_MODEL_ID --seeds 7 42 101
+```
+
+Open the printed directory under `artifacts/research/experiment-…/`:
+
+- `report.html`: readable comparison table with links to the evidence files.
+- `summary.csv`: mean failures and costs by budget and policy.
+- `comparisons.csv`: every test day, forecast seed, policy, run ID, and savings versus no reserve.
+- `trades.csv`: readable test trades, fictional security/counterparty aliases, payment amounts, deadlines, and funding currencies.
+- `report.json` and `manifest.json`: complete results, settings, and file checksums.
+
+Budgets are in settlement-currency major units (USD in the default config). Policies within a comparison share the same trades, outcomes and FX valuation snapshot. Existing run storage prevents identical runs from being overwritten. Timing training must end before every test scenario begins. Forecast seeds change arrival samples, **not the underlying trade dataset**; generate several independently seeded datasets and pass their IDs after `--dataset` to study data variation. Means are descriptive, not confidence intervals. Do not select model settings based on these held-out results and then report the same test data as an unbiased evaluation.

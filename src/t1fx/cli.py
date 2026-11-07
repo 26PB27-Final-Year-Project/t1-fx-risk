@@ -66,6 +66,12 @@ def main(argv=None):
     score.add_argument("--model", required=True)
     score.add_argument("--dataset", required=True)
     score.add_argument("--split", choices=("train", "tuning", "calibration", "test"), default="test")
+    experiment = sub.add_parser("experiment", help="Compare held-out test days and export CSV/HTML research evidence")
+    experiment.add_argument("--dataset", nargs="+", required=True)
+    experiment.add_argument("--budgets", nargs="+", type=usd_minor, default=[0, 1_500_000, 3_000_000])
+    experiment.add_argument("--timing-model")
+    experiment.add_argument("--seeds", nargs="+", type=int, default=[42], help="Forecast seeds, not new trade datasets")
+    experiment.add_argument("--scenario-count", type=int, default=200)
     worker = sub.add_parser("worker", help="Process durable funding jobs; run alongside the API")
     worker.add_argument("--once", action="store_true", help="Process at most one job then exit")
     serve = sub.add_parser("serve", help="Serve the local dashboard, API, and OpenAPI docs")
@@ -167,6 +173,14 @@ def main(argv=None):
                 output = model.predict([row for row in rows if row["split"] == args.split], trades)
         except (ImportError, ValueError, RuntimeError, FileNotFoundError) as exc:
             parser.error(f"Risk model unavailable: {exc}")
+        print(json.dumps(output, indent=2))
+    elif args.command == "experiment":
+        from t1fx.experiments import run_experiment
+        try:
+            output = run_experiment(args.artifacts, args.dataset, args.budgets,
+                timing_model_id=args.timing_model, seeds=args.seeds, scenario_count=args.scenario_count)
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            parser.error(str(exc))
         print(json.dumps(output, indent=2))
     elif args.command == "worker":
         from t1fx.jobs import run_worker

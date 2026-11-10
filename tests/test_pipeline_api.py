@@ -208,3 +208,20 @@ def test_generated_watchlist_has_readable_labels_and_retains_research_ids(tmp_pa
     assert all(t['trade_label'].startswith('Trade ') and t['security_label'].startswith('Sample equity ') for t in items)
     assert {t['trade_id'] for t in items} == {t.trade_id for t in scenario.trades}
     assert all(t['counterparty_label'].startswith('Sample counterparty ') for t in items)
+
+
+def test_probability_sorted_page_returns_its_forecast_without_extra_inference(demo, monkeypatch):
+    from unittest.mock import Mock
+    store, report, client = demo
+    model = Mock()
+    model.predict.side_effect = lambda rows, trades: [
+        {'trade_id': row['trade_id'], 'p_fail_any': .25, 'explanation': {}}
+        for row in rows]
+    monkeypatch.setattr('t1fx.api.RiskModel', Mock(return_value=model))
+    run = report['runs'][0]['run_id']
+    response = client.get(f'/api/v1/runs/{run}/trades?sort=probability&model_id=selected')
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['model_predictions']
+    assert {row['trade_id'] for row in data['model_predictions']} <= {row['trade_id'] for row in data['items']}
+    assert model.predict.call_count == 1

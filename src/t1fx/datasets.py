@@ -9,6 +9,8 @@ import platform
 import re
 import shutil
 import tempfile
+from collections import OrderedDict
+from threading import Lock
 from collections import Counter
 from datetime import timedelta
 from pathlib import Path
@@ -219,8 +221,8 @@ def publish_dataset(root, tables, scenarios, config, report, provenance, output_
             f"- Snapshots: {report['snapshot_count']}\n- Deadline failures: {report['failed_count']}\n"
             f"- Censored trades: {report['censored_count']}\n- Reference policy: fixed-0\n"
             f"- Formats: {', '.join(identity['formats'])}\n\n"
-            "Calendar holidays and FX cutoffs are explicitly assumed profiles, not official schedules. "
-            "Purchases use the configured settlement currency (EUR by default). Securities are assumed available. Each day is an "
+            "Selected calendars have versioned sources; other calendars and FX cutoffs remain declared assumptions. "
+            "Purchases use the configured settlement currency (USD by default). Securities are assumed available. Each day is an "
             "independent cash pool episode; balances do not roll across days. Opening cash and fully "
             "committed FX receipts are separate resources. No optimizer intervention is applied.\n\n"
             "Partitions contain whole trading days. All labels in one partition mature before the "
@@ -250,7 +252,13 @@ def publish_dataset(root, tables, scenarios, config, report, provenance, output_
             shutil.rmtree(staging)
 
 
-def validate_dataset(root: Path, dataset_id: str) -> dict:
+# Bounded process-local memo of successful semantic checks. File bytes are
+# rehashed on EVERY call, including cache hits; timestamps are never trusted.
+_VALIDATED = OrderedDict()
+_VALIDATED_LOCK = Lock()
+
+
+def validate_dataset(root: Path, dataset_id: str, *, reuse_verified: bool = False) -> dict:
     directory = _directory(root, dataset_id)
     manifest = json.loads((directory/"manifest.json").read_text())
     if (manifest.get("dataset_id") != dataset_id or manifest.get("status") != "SUCCEEDED"
@@ -273,6 +281,13 @@ def validate_dataset(root: Path, dataset_id: str) -> dict:
             raise ValueError("Artifact path escapes dataset directory")
         if not path.is_file() or _hash_file(path) != checksum:
             raise ValueError(f"Dataset checksum mismatch: {name}")
+    scenario_names = tuple(sorted(path.name for path in (directory/'scenarios').glob('*.json')))
+    cache_key = (str(directory.resolve()), digest(manifest), scenario_names)
+    if reuse_verified:
+        with _VALIDATED_LOCK:
+            if cache_key in _VALIDATED:
+                _VALIDATED.move_to_end(cache_key)
+                return manifest
     tables = {}
     for name, contract in TABLES.items():
         entry = manifest["tables"][name]
@@ -304,13 +319,24 @@ def validate_dataset(root: Path, dataset_id: str) -> dict:
         raise ValueError("Dataset report identity mismatch")
     if json.loads((directory/"validation.json").read_text()) != manifest["summary"]:
         raise ValueError("Dataset validation report mismatch")
+    if reuse_verified:
+        with _VALIDATED_LOCK:
+            _VALIDATED[cache_key] = True
+            _VALIDATED.move_to_end(cache_key)
+            while len(_VALIDATED) > 64:
+                _VALIDATED.popitem(last=False)
     return manifest
 
 
 def generate_release(config: GenerationConfig, root: Path, output_format="auto") -> dict:
     if output_format == "both" and importlib.util.find_spec("pyarrow") is None:
         raise RuntimeError("PyArrow is unavailable. Install .[parquet], or select --format json")
-    tables, scenarios, report = build_tables(config)
+    from t1fx.generation import FX_CACHE
+    token = FX_CACHE.set(Path(root)/"fx_cache")
+    try:
+        tables, scenarios, report = build_tables(config)
+    finally:
+        FX_CACHE.reset(token)
     provenance = {"generator_version": "seeded-v1", "code_hash": _code_hash(),
                   "python": platform.python_version(),
                   "numpy": importlib.metadata.version("numpy"),

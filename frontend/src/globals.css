@@ -1,0 +1,148 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@config "../tailwind.config.js";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+}
+/* Six core colors. Semantic roles derive from these in both themes. */
+:root {
+  color-scheme: light;
+  --ink: #090B0F;
+  --white: #FFFFFF;
+  --blue: #1659DB;
+  --slate: #566278;
+  --green: #17654C;
+  --red: #B52D46;
+  --background: color-mix(in srgb, var(--slate) 5%, var(--white));
+  --foreground: var(--ink);
+  --card: var(--white);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary: var(--blue);
+  --primary-foreground: var(--white);
+  --secondary: color-mix(in srgb, var(--slate) 9%, var(--white));
+  --secondary-foreground: var(--foreground);
+  --muted: var(--secondary);
+  --muted-foreground: var(--slate);
+  --accent: color-mix(in srgb, var(--blue) 9%, var(--white));
+  --accent-foreground: var(--blue);
+  --destructive: var(--red);
+  --destructive-foreground: var(--white);
+  --border: color-mix(in srgb, var(--slate) 20%, var(--white));
+  --input: color-mix(in srgb, var(--slate) 66%, var(--white));
+  --ring: var(--blue);
+  --success: var(--green);
+  --success-bg: color-mix(in srgb, var(--green) 9%, var(--white));
+  --danger-bg: color-mix(in srgb, var(--red) 8%, var(--white));
+  --warning: color-mix(in srgb, var(--red) 50%, var(--green));
+  --radius: .75rem;
+  --chart-1: var(--primary);
+  --chart-2: var(--success);
+  --chart-3: var(--warning);
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --surface-shadow: none;
+  --shadow-floating: 0 12px 36px color-mix(in srgb, var(--ink) 18%, transparent);
+  --font-body: 'IBM Plex Sans Variable', 'Avenir Next', sans-serif;
+  --font-display: var(--font-body);
+  --font-code: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+  --type-caption: .75rem;
+  --type-body: .875rem;
+  --type-lead: 1rem;
+  --type-section: 1.25rem;
+  --type-metric: 1.5rem;
+  --type-title: 2rem;
+  --content-width: 95rem;
+  --page-gutter: clamp(1rem, 3vw, 2.75rem);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: var(--ink);
+  --foreground: color-mix(in srgb, var(--white) 94%, var(--slate));
+  --card: color-mix(in srgb, var(--ink) 88%, var(--slate));
+  --popover: color-mix(in srgb, var(--ink) 75%, var(--slate));
+  --primary: color-mix(in srgb, var(--blue) 43%, var(--white));
+  --primary-foreground: var(--ink);
+  --secondary: color-mix(in srgb, var(--ink) 72%, var(--slate));
+  --muted-foreground: color-mix(in srgb, var(--slate) 46%, var(--white));
+  --accent: color-mix(in srgb, var(--blue) 22%, var(--ink));
+  --accent-foreground: var(--primary);
+  --destructive: color-mix(in srgb, var(--red) 40%, var(--white));
+  --destructive-foreground: var(--ink);
+  --border: color-mix(in srgb, var(--slate) 42%, var(--ink));
+  --input: color-mix(in srgb, var(--slate) 85%, var(--white));
+  --ring: var(--primary);
+  --success: color-mix(in srgb, var(--green) 40%, var(--white));
+  --success-bg: color-mix(in srgb, var(--green) 26%, var(--ink));
+  --danger-bg: color-mix(in srgb, var(--red) 20%, var(--ink));
+  --warning: color-mix(in srgb, var(--red) 22%, var(--white));
+  --sidebar: var(--background);
+}
+/* Chart-only categorical colors; never used for interface text or status. */
+.experiment-chart {
+  --experiment-chart-1: var(--primary);
+  --experiment-chart-2: var(--success);
+  --experiment-chart-3: #92400e;
+  --experiment-chart-4: #7e22ce;
+  --experiment-chart-5: var(--destructive);
+}
+[data-theme="dark"] .experiment-chart {
+  --experiment-chart-3: #fcd34d;
+  --experiment-chart-4: #d8b4fe;
+}
+@layer base {
+  * { @apply border-border; box-sizing: border-box; }
+  html { font-size: 16px; }
+  body { @apply bg-background text-foreground; margin: 0; font-family: var(--font-body); -webkit-font-smoothing: antialiased; font-size: var(--type-body); line-height: 1.5; }
+  button, input, select, textarea { font-family: inherit; }
+  button, a, select { touch-action: manipulation; }
+  button:not(:disabled), select { cursor: pointer; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; }
+  h1 { font-size: var(--type-title); line-height: 1.2; letter-spacing: -.03em; }
+  h2 { font-size: var(--type-section); line-height: 1.4; letter-spacing: -.02em; }
+  h3 { font-size: var(--type-lead); line-height: 1.5; }
+  p { line-height: 1.65; }
+  small { font-size: var(--type-caption); line-height: 1.5; }
+  code, pre { font-family: var(--font-code); }
+  a:focus-visible, summary:focus-visible, [data-slot="table-container"]:focus-visible { outline: 3px solid var(--ring); outline-offset: 3px; border-radius: 4px; }
+}

@@ -35,8 +35,9 @@ def test_restart_recovery_owner_fencing_and_cancellation(tmp_path, monkeypatch):
     assert recovered["attempts"] == 2
     assert not jobs.finish(job["job_id"], "old", result={"bad": True})
     assert jobs.heartbeat(job["job_id"], "new")
-    assert jobs.cancel(job["job_id"])["status"] == "CANCELED"
-    assert not jobs.finish(job["job_id"], "new", result={"late": True})
+    assert jobs.cancel(job["job_id"])["status"] == "CANCEL_REQUESTED"
+    assert jobs.finish(job["job_id"], "new", result={"late": True})
+    assert jobs.get(job["job_id"])["status"] == "CANCELED"
     assert jobs.claim("next") is None
 
 
@@ -103,3 +104,41 @@ def test_submission_validation_origins_and_missing_jobs(tmp_path):
     }).status_code == 403
     assert client.get("/api/v1/jobs/missing").status_code == 404
     assert client.post("/api/v1/jobs/missing/cancel").status_code == 404
+
+
+def test_checkpoint_fences_expired_owner_and_preserves_finished_stage_on_cancel(tmp_path, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr('t1fx.jobs.time.time', lambda: clock[0])
+    jobs = JobStore(tmp_path)
+    job = jobs.submit('run-test', RecomputeRequest(liquidity_limit='50'), 'checkpoint')
+    jobs.claim('old', lease_seconds=10)
+    jobs.checkpoint(job['job_id'], 'old', 'First stage', {'completed': 1})
+    clock[0] += 11
+    with pytest.raises(InterruptedError, match='lease lost'):
+        jobs.checkpoint(job['job_id'], 'old', 'Expired write', {'completed': 2})
+    assert jobs.get(job['job_id'])['result']['outputs'] == {'completed': 1}
+    jobs.claim('new')
+    jobs.cancel(job['job_id'])
+    with pytest.raises(InterruptedError, match='completed outputs saved'):
+        jobs.checkpoint(job['job_id'], 'new', 'Second stage completed', {'completed': 2})
+    assert jobs.get(job['job_id'])['result']['outputs'] == {'completed': 2}
+    assert jobs.get(job['job_id'])['status'] == 'CANCEL_REQUESTED'
+    assert jobs.finish(job['job_id'], 'new', error='Stopped between stages')
+    assert jobs.get(job['job_id'])['status'] == 'CANCELED'
+
+
+def test_worker_revalidates_legacy_request_and_timing_compatibility(tmp_path, monkeypatch):
+    report = run_comparison(three_trade_scenario(), 3000000, RunStore(tmp_path))
+    run_id = report['runs'][0]['run_id']
+    jobs = JobStore(tmp_path)
+    invalid = jobs.submit_payload({'run_id': run_id, 'liquidity_limit': '10', 'scenario_count': 9999}, 'invalid')
+    work_once(tmp_path)
+    assert jobs.get(invalid['job_id'])['status'] == 'FAILED'
+    assert 'scenario_count' in jobs.get(invalid['job_id'])['error']
+    request = RecomputeRequest(liquidity_limit='10', timing_model_id='timing-'+'a'*20)
+    queued = jobs.submit(run_id, request, 'timing')
+    def incompatible(*args):
+        raise ValueError('Timing labels have not matured')
+    monkeypatch.setattr('t1fx.workflow.ensure_timing_compatible', incompatible)
+    work_once(tmp_path)
+    assert 'Timing labels have not matured' in jobs.get(queued['job_id'])['error']

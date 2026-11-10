@@ -200,3 +200,22 @@ def test_parquet_round_trip_and_json_export(config, tmp_path):
     for name, entry in exported["tables"].items():
         assert digest(read_parquet(directory/entry["parquet"], TABLES[name])) == entry["canonical_sha256"]
     assert (tmp_path/"datasets"/original["dataset_id"]).is_dir()
+
+
+def test_verified_semantic_reuse_still_hashes_files_and_checks_scenario_set(config, tmp_path, monkeypatch):
+    import t1fx.datasets as datasets
+    manifest = generate_release(config, tmp_path, 'json')
+    dataset_id = manifest['dataset_id']
+    expected = validate_dataset(tmp_path, dataset_id, reuse_verified=True)
+    monkeypatch.setattr(datasets, 'validate_tables', lambda _: (_ for _ in ()).throw(AssertionError('Semantic work repeated')))
+    assert validate_dataset(tmp_path, dataset_id, reuse_verified=True) == expected
+    directory = tmp_path/'datasets'/dataset_id
+    target = directory/'resolved_config.json'
+    raw = target.read_bytes()
+    target.write_bytes(raw + b' ')
+    with pytest.raises(ValueError, match='checksum mismatch'):
+        validate_dataset(tmp_path, dataset_id, reuse_verified=True)
+    target.write_bytes(raw)
+    (directory/'scenarios'/'unexpected.json').write_text('{}')
+    with pytest.raises(AssertionError, match='Semantic work repeated'):
+        validate_dataset(tmp_path, dataset_id, reuse_verified=True)

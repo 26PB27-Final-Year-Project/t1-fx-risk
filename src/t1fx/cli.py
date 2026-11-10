@@ -76,6 +76,8 @@ def main(argv=None):
     experiment.add_argument("--scenario-count", type=int, default=200)
     worker = sub.add_parser("worker", help="Process durable funding jobs; run alongside the API")
     worker.add_argument("--once", action="store_true", help="Process at most one job then exit")
+    start = sub.add_parser("start", help="Supervise the dashboard API and worker together")
+    start.add_argument("--port", type=int, default=8000)
     serve = sub.add_parser("serve", help="Serve the local dashboard, API, and OpenAPI docs")
     serve.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
@@ -193,6 +195,12 @@ def main(argv=None):
             run_worker(args.artifacts, once=args.once)
         except KeyboardInterrupt:
             pass
+    elif args.command == "start":
+        from t1fx.launcher import supervise
+        try:
+            supervise(args.artifacts,args.port)
+        except RuntimeError as exc:
+            parser.error(str(exc))
     elif args.command == "serve":
         import uvicorn
 

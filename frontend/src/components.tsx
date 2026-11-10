@@ -4,6 +4,8 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/com
 import { useEffect, useState, type ReactNode } from 'react';
 
 const paths: Record<string, ReactNode> = {
+  flask: <><path d="M9 3h6m-5 0v6l-6 10a1.3 1.3 0 0 0 1.1 2h13.8a1.3 1.3 0 0 0 1.1-2L14 9V3M7 15h10"/><path d="M10 18h.01M13 12h.01"/></>,
+  trades: <><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></>,
   grid: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
   wallet: <><path d="M20 8V5a2 2 0 0 0-2-2H6a3 3 0 0 0 0 6h14v11H6a3 3 0 0 1-3-3V6"/><path d="M20 12h-5v5h5"/><path d="M16 14.5h1"/></>,
   chart: <><path d="M4 3v17h17M8 15v-4m5 4V7m5 8V4"/></>,
@@ -40,9 +42,6 @@ export function Status({value}: {value: string}) {
   const good = ['VALID', 'INSTRUCTED', 'OPTIMAL', 'SUCCEEDED', 'CREDITED'].includes(value);
   const bad = ['MISMATCH', 'FAILED', 'FALLBACK'].includes(value);
   return <Badge variant="outline" className={`status ${good ? 'good' : bad ? 'bad' : 'neutral'}`}><span/>{value.toLowerCase().replaceAll('_', ' ')}</Badge>;
-}
-export function RiskMeter({score}: {score: number}) {
-  return <div className={`risk-meter ${score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low'}`} aria-label={`Rule score ${score} of 100`}><span>{score}<small>/100</small></span><div><i style={{width: `${score}%`}}/></div></div>;
 }
 export function StatCard({title, value, note, icon = 'chart'}: {title: string; value: string; note?: string; icon?: string}) {
   return <Card className="stat-card"><CardHeader className="stat-header"><CardTitle>{title}</CardTitle><Icon name={icon}/></CardHeader><CardContent className="stat-content"><strong>{value}</strong>{note && <CardDescription>{note}</CardDescription>}</CardContent></Card>;

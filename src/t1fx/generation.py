@@ -1,6 +1,7 @@
 """Seeded exogenous scenarios. Hidden draws never enter observable trade records."""
 
 import hashlib
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_CEILING, Decimal
@@ -133,6 +134,9 @@ class GeneratedDay:
     counterparty_truth: tuple[dict, ...]
 
 
+FX_CACHE = ContextVar('fx_cache', default=Path('artifacts/fx_cache'))
+
+
 def reference_snapshot(currencies, day, base):
     from t1fx.fx_rates import fetch_rates
     import json
@@ -141,7 +145,7 @@ def reference_snapshot(currencies, day, base):
     from t1fx.fx_rates import valuation_rates
     from t1fx.storage import canonical_bytes, digest
     key = digest({"currencies": sorted(currencies), "date": day.isoformat(), "base": base})
-    cache = Path("artifacts/fx_cache")
+    cache = FX_CACHE.get()
     path = cache / (key + ".json")
     if path.exists():
         envelope = json.loads(path.read_text())
@@ -329,8 +333,8 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
     return GeneratedDay(scenario, split, tuple(injections), tuple(counterparties))
 
 
-def generate_dataset(config: GenerationConfig):
-    """Whole-day partitions with recovery-horizon embargo between partitions."""
+def generation_schedule(config: GenerationConfig):
+    """Calendar-only schedule shared by preview and actual generation (no FX calls)."""
     train_days = min(config.trading_days-3, max(1, int(config.trading_days*0.6)))
     tuning_days = min(config.trading_days-train_days-2, max(1, int(config.trading_days*0.15)))
     calibration_days = min(config.trading_days-train_days-tuning_days-1,
@@ -343,9 +347,10 @@ def generate_dataset(config: GenerationConfig):
         last_end = None
         for split_day in range(day_count):
             count = config.trade_count//config.trading_days + (day_index < config.trade_count % config.trading_days)
-            generated = generate_day(config, day, count, split)
-            yield generated
-            last_end = generated.scenario.ends_at
+            yield day, count, split
+            settlement_day = config.market.settlement_date(day)
+            end_day = config.market.advance_settlement(settlement_day, config.recovery_business_days)
+            last_end = config.market.cutoff_at(end_day, "settlement")
             if split_day + 1 < day_count:
                 day = config.market.advance(day, 1)
             day_index += 1
@@ -353,3 +358,9 @@ def generate_dataset(config: GenerationConfig):
         if split != "test":
             local_end_day = last_end.astimezone(ZoneInfo(config.market.timezone)).date()
             day = config.market.advance(local_end_day, 1)
+
+
+def generate_dataset(config: GenerationConfig):
+    """Whole-day partitions with recovery-horizon embargo between partitions."""
+    for day, count, split in generation_schedule(config):
+        yield generate_day(config, day, count, split)

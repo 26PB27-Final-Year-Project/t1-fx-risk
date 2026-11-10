@@ -1,6 +1,7 @@
 """Run-scoped local API, durable funding submissions, and dashboard hosting."""
 
 import os
+import json
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -14,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 
-from t1fx.domain import CURRENCY_EXPONENT, Currency, Event, Outcome, RulePrediction, whole
+from t1fx.domain import Scenario, CURRENCY_EXPONENT, Currency, Event, Outcome, RulePrediction, whole
 from t1fx.storage import ArtifactError, RunStore
 from t1fx.jobs import JobConflict, JobStore, RecomputeRequest
 from t1fx.models import ModelStore, ModelUnavailable, RiskModel
@@ -51,6 +52,7 @@ class TradePage(BaseModel):
     reference_policy_id: str
     available_currencies: list[str] = []
     items: list[TradeView]
+    model_predictions: list[dict] = []
     next_cursor: str | None
 
 
@@ -109,7 +111,10 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
-        return error_response(request, 422, "VALIDATION_ERROR", "Invalid request parameters.")
+        fields = [{"field": ".".join(str(part) for part in error['loc'] if part != 'body'),
+                   "message": error['msg']} for error in exc.errors()]
+        message = '; '.join(f"{item['field'] or 'request'}: {item['message']}" for item in fields)
+        return error_response(request, 422, "VALIDATION_ERROR", message, {"fields": fields})
 
     @app.get("/health/live")
     def live():
@@ -148,13 +153,21 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         return {"items": items}
 
     @app.get("/api/v1/timing-models")
-    def list_timing_models():
+    def list_timing_models(run_id: str | None = None):
         from t1fx.timing import load_model
 
         items = []
         for path in sorted((store.root / "timing_models").glob("timing-*.json")):
             model, _ = load_model(store.root, path.stem)
+            reasons=[]
+            if run_id:
+                from t1fx.workflow import ensure_timing_compatible
+                try:
+                    ensure_timing_compatible(store.root,path.stem,Scenario.model_validate(store.read(run_id,'scenario.json')))
+                except ValueError as exc:
+                    reasons.append(str(exc))
             items.append({"model_id": path.stem, "dataset_id": model.dataset_id,
+                          "eligible":not reasons,"reasons":reasons,
                           "trained_through": model.trained_through.isoformat()})
         return {"items": items}
 
@@ -190,6 +203,16 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         as_of = datetime.fromisoformat(store.manifest(run_id)["decision_at"])
         trades = {t["trade_id"]: t for t in scenario["trades"]}
         scores = {p["trade_id"]: p for p in store.read(run_id, "predictions.json")}
+        # Index observable legs once instead of scanning all legs for every trade.
+        from collections import defaultdict
+        trade_legs, pool_legs = defaultdict(list), defaultdict(list)
+        for leg in scenario['fx_legs']:
+            if datetime.fromisoformat(leg['available_at']) > as_of or datetime.fromisoformat(leg['booked_at']) > as_of:
+                continue
+            if leg.get('trade_id'):
+                trade_legs[leg['trade_id']].append(leg)
+            else:
+                pool_legs[(leg['bucket']['cash_pool_id'], leg['bucket']['currency'])].append(leg)
         result = []
         for snapshot in store.read(run_id, "snapshots.json"):
             trade = trades[snapshot["trade_id"]]
@@ -200,11 +223,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                                  "sell_amount": str(whole(leg["sell_amount_minor"], leg["sell_currency"])),
                                  "buy_currency": currency, "buy_amount": str(whole(leg["buy_amount_minor"], currency)),
                                  "pricing": leg.get("pricing")}
-                                for leg in scenario["fx_legs"]
-                                if (leg.get("trade_id") == trade["trade_id"] or
-                                    (not leg.get("trade_id") and leg["bucket"] == trade["bucket"]))
-                                and datetime.fromisoformat(leg["available_at"]) <= as_of
-                                and datetime.fromisoformat(leg["booked_at"]) <= as_of],
+                                for leg in trade_legs[trade['trade_id']] + pool_legs[(trade['bucket']['cash_pool_id'], currency)]],
                 trade_id=trade["trade_id"], counterparty_id=trade["counterparty_id"],
                 cash_pool_id=snapshot["bucket"]["cash_pool_id"], currency=currency,
                 settlement_amount=str(whole(trade["settlement_amount_minor"], currency)),
@@ -237,11 +256,12 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         if sort == "amount" and len({row.currency for row in rows}) > 1:
             raise HTTPException(422, "Select one currency before sorting nominal amounts.")
         probabilities = {}
+        forecast = []
         if sort == "probability":
             if model_id is None:
                 raise HTTPException(422, "Probability sorting requires a calibrated model.")
-            probabilities = {p["trade_id"]: p["p_fail_any"]
-                             for p in model_predictions(run_id, model_id)["items"]}
+            forecast = model_predictions(run_id, model_id)["items"]
+            probabilities = {p["trade_id"]: p["p_fail_any"] for p in forecast}
         rows.sort(key=lambda row: (
             -probabilities.get(row.trade_id, -1) if sort == "probability" else
             -row.prediction.score if sort == "risk" else
@@ -255,6 +275,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         return TradePage(
             run_id=run_id, as_of=manifest["decision_at"],
             reference_policy_id=manifest["reference_policy_id"], available_currencies=available_currencies, items=rows[:limit],
+            model_predictions=[p for p in forecast if p["trade_id"] in {row.trade_id for row in rows[:limit]}],
             next_cursor=rows[limit-1].trade_id if len(rows) > limit else None,
         )
 
@@ -366,6 +387,11 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         if body.timing_model_id:
             from t1fx.timing import load_model
             load_model(store.root, body.timing_model_id)
+            from t1fx.workflow import ensure_timing_compatible
+            try:
+                ensure_timing_compatible(store.root,body.timing_model_id,Scenario.model_validate(store.read(run_id,"scenario.json")))
+            except ValueError as exc:
+                raise HTTPException(422,str(exc)) from exc
         if body.evaluation_local is not None:
             from t1fx.calendars import local_instant
             from zoneinfo import ZoneInfo
@@ -420,6 +446,122 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         if result["plan"]["plan_id"] != plan_id:
             raise HTTPException(404, "Funding plan not found in this run.")
         return result
+
+    from t1fx.workflow import WorkflowRequest, compatibility, dataset_scenarios, export_record
+    from fastapi.responses import Response
+
+    @app.get('/api/v1/workflow/defaults')
+    def workflow_defaults(trading_days: int = Query(default=10, ge=4, le=40)):
+        from t1fx.workflow import recommended_start
+        clock = online_time()
+        today = datetime.fromisoformat(clock['utc_now']).date()
+        try:
+            start = recommended_start(today, trading_days)
+        except ValueError as exc:
+            raise HTTPException(422, f'Current-date defaults exceed saved calendar coverage: {exc}') from exc
+        return {'today': today.isoformat(), 'start_date': start.isoformat(), 'source': clock['source']}
+
+    @app.post('/api/v1/workflow/preview')
+    def workflow_preview(body:WorkflowRequest,request:Request):
+        require_local_origin(request)
+        from t1fx.workflow import generation_preview
+        try:
+            return generation_preview(body)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get('/api/v1/workflow/health')
+    def workflow_health():
+        return {'api': 'available', 'worker': jobs.worker_health()}
+
+    @app.get('/api/v1/workflow/catalog')
+    def workflow_catalog():
+        datasets, errors = [], []
+        for path in sorted((store.root/'datasets').glob('dataset-*/manifest.json'), key=lambda p:-p.stat().st_mtime_ns):
+            try:
+                manifest, scenarios = dataset_scenarios(store.root,path.parent.name)
+                directory=path.parent
+                config=json.loads((directory/'resolved_config.json').read_text())
+                outcomes=json.loads((directory/manifest['tables']['outcomes']['json']).read_text())
+                balance={split:{'failed':sum(bool(r['missed_contractual_deadline']) for r in outcomes if r['split']==split),
+                    'total':sum(r['split']==split for r in outcomes)} for split in ('train','tuning','calibration','test')}
+                datasets.append({'outcome_balance':balance,'dataset_id':path.parent.name,'name':f"{manifest['summary']['trade_count']} trades · {config['start_date']} · seed {config['seed']}",
+                    'summary':manifest['summary'], 'configuration':config,
+                    'scenarios':[{'scenario_id':s.scenario_id,'decision_at':s.decision_at.isoformat(),'deadline_at':max(t.contractual_deadline_at for t in s.trades).isoformat(),'ends_at':s.ends_at.isoformat(),
+                        'name':f"{s.trades[0].executed_at.date()} · {len(s.trades)} trades · USD", 'currency':'USD'} for s in scenarios]})
+            except (ValueError,OSError,KeyError) as exc:
+                errors.append({'artifact':path.parent.name,'message':str(exc)})
+        risk=[]
+        for path in sorted((store.root/'models').glob('model-*/manifest.json')):
+            try:
+                artifact=models.read(path.parent.name)
+                risk.append({'model_id':path.parent.name,'dataset_id':artifact['training_manifest.json']['dataset_id'],
+                    'metrics':artifact['metrics.json'],'training':artifact['training_manifest.json']})
+            except (ValueError,OSError) as exc:
+                errors.append({'artifact':path.parent.name,'message':str(exc)})
+        timing=[]
+        from t1fx.timing import load_model
+        for path in sorted((store.root/'timing_models').glob('timing-*.json')):
+            try:
+                model,metrics=load_model(store.root,path.stem)
+                timing.append({'model_id':path.stem,'dataset_id':model.dataset_id,'metrics':metrics})
+            except (ValueError,OSError) as exc:
+                errors.append({'artifact':path.stem,'message':str(exc)})
+        records=RunStore(store.root/'experiments').list_runs()
+        return {'datasets':datasets,'risk_models':risk,'timing_models':timing,'errors':errors,
+                'experiments':[{'experiment_id':m['run_id']} for m in records]}
+
+    @app.post('/api/v1/workflow/eligibility')
+    def workflow_eligibility(body:WorkflowRequest,request:Request):
+        require_local_origin(request)
+        return compatibility(store.root,body)
+
+    @app.post('/api/v1/workflow/jobs',status_code=202)
+    def workflow_submit(body:WorkflowRequest,request:Request,
+                        idempotency_key:str=Header(min_length=1,max_length=128)):
+        require_local_origin(request)
+        check=compatibility(store.root,body)
+        if not check['eligible']:
+            return JSONResponse(status_code=422,content={'code':'INELIGIBLE','message':'; '.join(check['reasons']),'reasons':check['reasons']})
+        return jobs.submit(None,body,idempotency_key)
+
+    @app.post('/api/v1/workflow/jobs/{job_id}/retry',status_code=202)
+    def workflow_retry(job_id:str,request:Request,idempotency_key:str=Header(min_length=1,max_length=128)):
+        require_local_origin(request)
+        try:
+            prior=jobs.get(job_id)
+        except KeyError:
+            raise HTTPException(404,'Job not found.') from None
+        if prior['status'] not in ('FAILED','CANCELED'):
+            raise HTTPException(409,'Only failed or canceled preparations can be retried')
+        if 'kind' not in prior['request']:
+            raise HTTPException(422,'This is a funding job. Submit it again from Funding.')
+        body=WorkflowRequest.model_validate(prior['request'])
+        return jobs.submit_payload(body.model_dump(mode='json'),idempotency_key,retry_of=job_id)
+
+    @app.get('/api/v1/workflow/experiments/{record_id}')
+    def workflow_record(record_id:str):
+        return RunStore(store.root/'experiments').read(record_id,'experiment.json')
+
+    @app.get('/api/v1/workflow/experiments/{record_id}/export')
+    def workflow_export(record_id:str,format:Literal['json','csv']='json'):
+        raw=export_record(store.root,record_id,format)
+        return Response(raw,media_type='application/json' if format=='json' else 'text/csv',
+                        headers={'Content-Disposition':f'attachment; filename="experiment-{record_id}.{format}"'})
+
+    @app.post('/api/v1/workflow/diagnostics')
+    def workflow_diagnostics(request:Request):
+        require_local_origin(request)
+        from t1fx.fx_rates import fetch_rates
+        from datetime import date,timedelta
+        results={}
+        for name,action in [('clock',online_time),('fx',lambda:fetch_rates({'EUR','USD'},date.today()-timedelta(days=1),'USD'))]:
+            try:
+                action(); results[name]={'available':True}
+            except (ValueError,RuntimeError,OSError) as exc:
+                results[name]={'available':False,'message':str(exc)+' Check HTTPS access, proxy settings and retry.'}
+        return results
+
 
     dashboard = Path(os.environ.get("T1FX_DASHBOARD_DIR", Path(__file__).parent / "dashboard"))
     if (dashboard / "index.html").is_file():

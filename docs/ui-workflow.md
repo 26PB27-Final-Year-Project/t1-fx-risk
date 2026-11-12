@@ -129,3 +129,13 @@ Request parsing does not derive dates from the host clock. Generation resolves a
 Training/comparison requests for existing datasets do not calculate generation defaults. Retry checkpoints with completed datasets validate and reuse those artifacts without needing a new generation window. Full semantic dataset checks are reused throughout a worker attempt, including final experiment publication, while every validation still verifies current file checksums.
 
 The dependency lock targets Python 3.11 exclusively. CI uses `uv sync --locked` to reject future configuration/lock mismatches.
+
+Catalog recovery isolates invalid or missing experiment manifests: healthy datasets, models and experiments remain available, and the damaged experiment is reported in the catalog's errors. Dataset reads require an exact match between scenario JSON files and their manifest checksum entries before any validation cache can be reused. Missing, additional or unlisted scenarios are rejected; intact datasets retain checksum verification and cached semantic validation.
+
+## Audit fixes: resource use, dates and recovery
+
+Funding optimization builds sparse constraint matrices and rejects problems above 250,000 cash-pool/scenario combinations before allocating them. Objective, budget checks and replay semantics are unchanged. The solver and full experiment still need memory proportional to their inputs; the sparse fix is not a measured deployment minimum.
+
+FX request validation uses the online UTC date. Comparison reference requests use the day before the saved decision, without substituting the host date. Run listing reports invalid manifests separately; readiness succeeds when at least one fully verified run exists. Individual damaged artifacts still fail verification when accessed. Research trade exports use each currency’s minor-unit exponent, including whole yen.
+
+Comparison validation errors offer **Retry comparison validation**. Actions on an existing dataset omit unused generation settings; the backend also ignores these fields for existing-dataset operations, while new generation retains its input checks.

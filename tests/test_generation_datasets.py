@@ -238,7 +238,7 @@ def test_verified_semantic_reuse_still_hashes_files_and_checks_scenario_set(conf
         validate_dataset(tmp_path, dataset_id, reuse_verified=True)
     target.write_bytes(raw)
     (directory/'scenarios'/'unexpected.json').write_text('{}')
-    with pytest.raises(AssertionError, match='Semantic work repeated'):
+    with pytest.raises(ValueError, match='scenario files must exactly match'):
         validate_dataset(tmp_path, dataset_id, reuse_verified=True)
 
 
@@ -307,3 +307,26 @@ def test_sparse_daily_cohorts_cover_all_routes_across_dataset(config):
     days=list(generate_dataset(config))
     assert all(len(day.scenario.trades)==2 for day in days)
     assert {leg.sell_currency for day in days for leg in day.scenario.fx_legs} == {r.sell_currency for r in config.fx_routes}
+
+
+@pytest.mark.parametrize('warm', [False, True])
+@pytest.mark.parametrize('mutation', ['missing_checksum', 'extra_file', 'missing_file'])
+def test_scenario_inventory_checked_before_cache_reuse(config, tmp_path, warm, mutation):
+    from t1fx.datasets import dataset_manifest
+    manifest = generate_release(config, tmp_path, 'json')
+    dataset_id = manifest['dataset_id']
+    directory = tmp_path/'datasets'/dataset_id
+    if warm:
+        validate_dataset(tmp_path, dataset_id, reuse_verified=True)
+    name = next(name for name in manifest['files'] if name.startswith('scenarios/'))
+    if mutation == 'missing_checksum':
+        del manifest['files'][name]
+        (directory/'manifest.json').write_text(json.dumps(manifest))
+    elif mutation == 'extra_file':
+        (directory/'scenarios'/'unexpected.json').write_text((directory/name).read_text())
+    else:
+        (directory/name).unlink()
+    for action in (lambda: dataset_manifest(tmp_path, dataset_id),
+                   lambda: validate_dataset(tmp_path, dataset_id, reuse_verified=True)):
+        with pytest.raises(ValueError, match='scenario files must exactly match'):
+            action()

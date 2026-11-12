@@ -57,6 +57,16 @@ class WorkflowRequest(BaseModel):
     common_shock_weight: float = Field(default=.5, ge=0, le=1)
     budgets: list[Decimal] = Field(default_factory=lambda: [Decimal(0), Decimal(15000), Decimal(30000)], min_length=1, max_length=6)
 
+    @model_validator(mode='before')
+    @classmethod
+    def ignore_unused_generation_fields(cls, data):
+        if isinstance(data, dict) and data.get('dataset_id') and data.get('kind') != 'generate':
+            data = dict(data)
+            for key in ('start_date', 'trade_count', 'trading_days', 'seed', 'opening_cash_fraction',
+                        'funding_stress_rate', 'late_confirmation_rate', 'ssi_mismatch_rate'):
+                data.pop(key, None)
+        return data
+
     @model_validator(mode='after')
     def coherent(self):
         if self.kind == 'generate' and self.dataset_id is not None:
@@ -305,6 +315,14 @@ def _execute_job(root, payload, checkpoint, progress):
         dataset_id = save('Generating dataset', 'dataset_id', lambda: generate_release(resolved_generation,root,'auto')['dataset_id'])
     validate_dataset(root,dataset_id, reuse_verified=True)
     outputs['dataset_id'] = dataset_id
+    # Record the selected dataset's actual generation settings, rather than UI drafts/defaults.
+    saved_config = json.loads((root/'datasets'/dataset_id/'resolved_config.json').read_text())
+    generation_fields = {key: saved_config[key] for key in (
+        'trade_count', 'trading_days', 'seed', 'opening_cash_fraction', 'funding_stress_rate',
+        'late_confirmation_rate', 'ssi_mismatch_rate')}
+    generation_fields['start_date'] = date.fromisoformat(saved_config['start_date'])
+    generation_fields['opening_cash_fraction'] = Decimal(generation_fields['opening_cash_fraction'])
+    request = request.model_copy(update=generation_fields)
     if request.kind in ('train-risk','train-both','prepare'):
         save('Training settlement risk model', 'risk_model_id', lambda: train_model(root,dataset_id)['model_id'])
     if request.kind in ('train-timing','train-both','prepare'):

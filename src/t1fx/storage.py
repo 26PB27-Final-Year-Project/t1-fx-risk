@@ -97,9 +97,16 @@ class RunStore:
             self.read(run_id, name)
         return manifest
 
-    def list_runs(self) -> list[dict]:
+    def list_runs(self, *, errors: list | None = None) -> list[dict]:
         runs = []
         paths = (self.root/"runs").glob("run-*/manifest.json")
-        for path in sorted(paths, key=lambda path: (-path.stat().st_mtime_ns, path.parent.name)):
-            runs.append(self.manifest(path.parent.name))
-        return runs
+        ordered = []
+        for path in paths:
+            try:
+                manifest = self.manifest(path.parent.name)
+                ordered.append((path.stat().st_mtime_ns, path.parent.name, manifest))
+            except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
+                if errors is None:
+                    raise
+                errors.append({'artifact': path.parent.name, 'message': str(exc)})
+        return [manifest for _, _, manifest in sorted(ordered, key=lambda item: (-item[0], item[1]))]

@@ -11,6 +11,12 @@ from t1fx.fx_rates import fetch_rates, valuation_rates
 @pytest.mark.parametrize("base,foreign", [("USD", "EUR"), ("EUR", "USD")])
 def test_frankfurter_rate_snapshot_and_usd_valuation(monkeypatch, base, foreign):
     requested = date(2026, 10, 13)
+    class WrongHostDate(date):
+        @classmethod
+        def today(cls):
+            raise AssertionError("FX validation must not consult the host date")
+    monkeypatch.setattr('t1fx.fx_rates.date', WrongHostDate)
+    monkeypatch.setattr('t1fx.fx_rates.online_time', lambda: {'utc_now':'2026-11-12T12:00:00+00:00'})
 
     class Response(io.BytesIO):
         def __enter__(self):

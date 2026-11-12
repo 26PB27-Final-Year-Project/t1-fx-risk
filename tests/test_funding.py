@@ -117,3 +117,24 @@ def test_shared_receipt_counted_once_and_unknown_forecasts_rejected():
 def test_incorrect_scenario_weights_rejected():
     with pytest.raises(ValidationError, match="sum to one"):
         FundingProblem(budget_minor=1, probabilities=(Decimal("0.9"),), requirements=(requirement(),))
+
+
+def test_large_research_problem_uses_sparse_constraints(monkeypatch):
+    from scipy.sparse import issparse
+    def solver(objective, *, A_ub, **kwargs):
+        assert issparse(A_ub)
+        assert A_ub.shape == (80001, 80008)
+        assert A_ub.nnz == 160008
+        assert A_ub.data.nbytes < 2_000_000
+        return SimpleNamespace(success=False, message='forced solver failure')
+    monkeypatch.setattr('scipy.optimize.linprog', solver)
+    problem = FundingProblem(budget_minor=1000, probabilities=(Decimal('.0001'),)*10000,
+        requirements=tuple(requirement(pool=str(i), scenario_amounts_minor=(100,)*10000) for i in range(8)))
+    assert optimize(problem).fallback_used
+
+
+def test_optimizer_rejects_oversized_problem_before_allocating():
+    problem = FundingProblem(budget_minor=1000, probabilities=(Decimal('.0001'),)*10000,
+        requirements=tuple(requirement(pool=str(i), scenario_amounts_minor=(100,)*10000) for i in range(26)))
+    with pytest.raises(ValueError, match='250,000'):
+        optimize(problem)

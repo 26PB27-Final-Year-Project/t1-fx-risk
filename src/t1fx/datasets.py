@@ -279,6 +279,10 @@ def dataset_manifest(root: Path, dataset_id: str) -> dict:
         raise ValueError("Dataset table set mismatch")
     if not {"resolved_config.json", "schemas.json", "validation.json", "data-card.md"} <= set(manifest["files"]):
         raise ValueError("Dataset metadata files missing")
+    scenario_files = {f"scenarios/{path.name}" for path in (directory/"scenarios").glob("*.json")}
+    declared_scenarios = {name for name in manifest["files"] if name.startswith("scenarios/")}
+    if not scenario_files or scenario_files != declared_scenarios:
+        raise ValueError("Dataset scenario files must exactly match manifest checksum entries")
     for name, contract in TABLES.items():
         entry = manifest["tables"][name]
         prefix = "simulation_truth" if contract.private else "tables"

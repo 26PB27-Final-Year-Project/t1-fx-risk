@@ -57,3 +57,18 @@ def test_export_preserves_negative_cost_savings_without_allowing_formulas():
     assert row['cost_saved'] == '-12.50'
     assert row['trade_id'] == "'=1+1"
     assert row['other_id'] == "'-1+2"
+
+
+def test_jpy_research_export_preserves_whole_yen(tmp_path):
+    from decimal import Decimal
+    config = load_config(Path('configs/generation/smoke.json'))
+    route = config.fx_routes[0].model_copy(update={'sell_currency':'EUR','buy_currency':'JPY'})
+    config = config.model_copy(update={'trade_count':80,'trading_days':4,'fx_routes':(route,)})
+    manifest = generate_release(config,tmp_path,'json')
+    directory = tmp_path/'datasets'/manifest['dataset_id']
+    originals = {r['trade_id']:r['settlement_amount_minor'] for r in json.loads((directory/'tables/trades.json').read_text())}
+    result = run_experiment(tmp_path,[manifest['dataset_id']],[0])
+    with (Path(result['directory'])/'trades.csv').open(encoding='utf-8-sig') as stream:
+        rows=list(csv.DictReader(stream))
+    assert rows
+    assert all(Decimal(r['payment_due']) == originals[r['trade_id']] for r in rows)

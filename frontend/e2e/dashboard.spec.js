@@ -293,12 +293,15 @@ test('guided experiment creates data, trains real models, recovers on refresh an
   await page.reload();
   await expect(job).toContainText('SUCCEEDED');
   await expect(page.getByRole('combobox',{name:'Saved dataset',exact:true})).toContainText('200 trades');
+  await page.getByLabel('Number of trades',{exact:true}).fill('');
   const preparation=page.waitForResponse(r=>r.url().endsWith('/workflow/jobs')&&r.request().method()==='POST');
   await page.getByRole('button',{name:'Prepare complete experiment',exact:true}).click();
   const accepted=await (await preparation).json();
   await expect(job).toContainText(accepted.job_id);
   await expect(job).toContainText('SUCCEEDED',{timeout:120000});
   await expect(page.getByRole('link',{name:'Download experiment JSON'})).toBeVisible();
+  const summary=await (await page.request.get(await page.getByRole('link',{name:'Download experiment JSON'}).getAttribute('href'))).json();
+  expect(summary.configuration.trade_count).toBe(200);
   await page.addStyleTag({content:'* { transition: none !important; animation: none !important; }'});
   for (const theme of ['Light','Dark']) {
     await page.getByRole('button',{name:theme+' theme',exact:true}).click();
@@ -311,6 +314,7 @@ test('guided experiment creates data, trains real models, recovers on refresh an
   await expect(page.getByRole('heading',{name:'Trade watchlist',exact:true})).toBeVisible();
   // Creating again must honor the new inputs even while an existing dataset is selected.
   await page.getByRole('button',{name:'Experiments',exact:true}).click();
+  await page.getByLabel('Number of trades',{exact:true}).fill('200');
   await page.getByLabel('Dataset seed',{exact:true}).fill('84');
   const generation = page.waitForResponse(r=>r.url().endsWith('/workflow/jobs')&&r.request().method()==='POST');
   await page.getByRole('button',{name:'Create dataset',exact:true}).click();
@@ -399,10 +403,11 @@ test('eligibility fails closed while settings change or validation is unavailabl
     summary:{trade_count:100,failed_count:10,partitions:Object.fromEntries(['train','tuning','calibration','test'].map(key=>[key,partition]))},
     scenarios:[{scenario_id:'held-out',name:'Held-out day',decision_at:'2026-07-10T12:00:00Z'}]};
   await page.route('**/api/v1/workflow/catalog',route=>route.fulfill({json:{datasets:[dataset],risk_models:[],timing_models:[],experiments:[],errors:[]}}));
+  let recovered=false;
   let release;
   const gate=new Promise(resolve=>{release=resolve;});
   await page.route('**/api/v1/workflow/eligibility',async route=>{
-    if(Number(route.request().postDataJSON().budget)===123){
+    if(Number(route.request().postDataJSON().budget)===123&&!recovered){
       await gate;
       await route.fulfill({status:503,json:{message:'Compatibility service temporarily unavailable'}});
     }else await route.fulfill({json:{eligible:true,reasons:[]}});
@@ -417,6 +422,9 @@ test('eligibility fails closed while settings change or validation is unavailabl
   release();
   await expect(page.getByRole('alert')).toContainText('Compatibility service temporarily unavailable');
   await expect(compare).toBeDisabled();
+  recovered=true;
+  await page.getByRole('button',{name:'Retry comparison validation',exact:true}).click();
+  await expect(compare).toBeEnabled();
 });
 
 test('funding disables incompatible timing models and explains why', async ({page}) => {

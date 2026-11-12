@@ -122,12 +122,20 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
 
     @app.get("/health/ready")
     def ready():
-        runs = store.list_runs()
+        errors = []
+        runs = store.list_runs(errors=errors)
         if not runs:
             raise HTTPException(503, "No published runs; execute `make demo` first.")
+        healthy = 0
         for run in runs:
-            store.validate(run["run_id"])
-        return {"status": "ready", "run_count": len(runs), "model": "UNCALIBRATED_RULE_SCORE"}
+            try:
+                store.validate(run["run_id"])
+                healthy += 1
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                errors.append({'artifact': run['run_id'], 'message': str(exc)})
+        if not healthy:
+            raise HTTPException(503, "No healthy published runs are available.")
+        return {"status": "ready", "run_count": healthy, "errors": errors, "model": "UNCALIBRATED_RULE_SCORE"}
 
     @app.exception_handler(OnlineClockUnavailable)
     async def clock_unavailable(request, exc):
@@ -139,7 +147,8 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
 
     @app.get("/api/v1/runs")
     def list_runs():
-        return {"items": store.list_runs()}
+        errors = []
+        return {"items": store.list_runs(errors=errors), "errors": errors}
 
     @app.get("/api/v1/models")
     def list_models(run_id: str | None = None):
@@ -432,7 +441,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
     def scenarios(run_id: str):
         selected = store.manifest(run_id)
         comparison_id = selected.get("comparison_id")
-        matched = [run for run in store.list_runs()
+        matched = [run for run in store.list_runs(errors=[])
                    if (run.get("comparison_id") == comparison_id if comparison_id
                        else run["run_id"] == run_id)]
         return {"run_id": run_id, "comparison_id": comparison_id,
@@ -511,9 +520,18 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                 timing.append({'model_id':path.stem,'dataset_id':model.dataset_id,'metrics':metrics})
             except (ValueError,OSError) as exc:
                 errors.append({'artifact':path.stem,'message':str(exc)})
-        records=RunStore(store.root/'experiments').list_runs()
+        experiment_store = RunStore(store.root/'experiments')
+        records = []
+        for directory in (experiment_store.root/'runs').glob('run-*'):
+            try:
+                manifest = experiment_store.manifest(directory.name)
+                modified = (directory/'manifest.json').stat().st_mtime_ns
+                records.append((modified, directory.name, manifest))
+            except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
+                errors.append({'artifact': directory.name, 'message': str(exc)})
+        records.sort(key=lambda item: (-item[0], item[1]))
         return {'datasets':datasets,'risk_models':risk,'timing_models':timing,'errors':errors,
-                'experiments':[{'experiment_id':m['run_id']} for m in records]}
+                'experiments':[{'experiment_id':m['run_id']} for _, _, m in records]}
 
     @app.post('/api/v1/workflow/model-choices')
     def workflow_model_choices(body: ModelChoicesRequest, request: Request):

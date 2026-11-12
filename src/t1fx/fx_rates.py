@@ -2,20 +2,21 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from t1fx.domain import Currency
+from t1fx.online_clock import online_time
 
 API_ROOT = "https://api.frankfurter.dev/v2/rate"
 
 
 def fetch_rates(currencies: set[Currency], as_of: date, base_currency: Currency = "USD") -> dict:
     """Return a serializable rate snapshot; one unit of currency is worth rate in the base currency."""
-    if as_of > date.today():
+    if as_of > datetime.fromisoformat(online_time()['utc_now']).astimezone(UTC).date():
         raise ValueError("FX valuation date cannot be in the future")
     def fetch_one(currency: Currency) -> dict:
         url = f"{API_ROOT}/{currency.lower()}/{base_currency.lower()}?{urlencode({'date': as_of.isoformat()})}"

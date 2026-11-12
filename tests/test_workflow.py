@@ -348,3 +348,54 @@ def test_comparison_checks_tables_once_but_rechecks_bytes(prepared, monkeypatch)
     workflow.execute_job(root, payload, {'outputs':out}, lambda *_: None)
     assert semantic.call_count == 1
     assert hashes.call_count > len(record['dataset_manifest']['files'])
+
+
+@pytest.mark.parametrize('contents', ['{}', '{broken', '[]', None])
+def test_catalog_isolates_damaged_experiments(prepared, contents):
+    root, out = prepared
+    bad_id = 'run-'+'f'*20
+    directory = root/'experiments'/'runs'/bad_id
+    directory.mkdir()
+    path = directory/'manifest.json'
+    try:
+        if contents is not None:
+            path.write_text(contents)
+        client = TestClient(create_app(root))
+        for suffix in ('', '?include_models=false'):
+            response = client.get('/api/v1/workflow/catalog'+suffix)
+            assert response.status_code == 200, response.text
+            catalog = response.json()
+            assert out['dataset_id'] in {item['dataset_id'] for item in catalog['datasets']}
+            assert out['experiment_id'] in {item['experiment_id'] for item in catalog['experiments']}
+            assert bad_id not in {item['experiment_id'] for item in catalog['experiments']}
+            assert any(error['artifact'] == bad_id for error in catalog['errors'])
+            if not suffix:
+                assert out['risk_model_id'] in {m['model_id'] for m in catalog['risk_models']}
+    finally:
+        path.unlink(missing_ok=True)
+        directory.rmdir()
+
+
+def test_saved_dataset_ignores_invalid_unused_generation_fields():
+    request = WorkflowRequest(kind='train-risk',dataset_id='dataset-'+'a'*20,
+        start_date='invalid',trade_count='',trading_days='',seed='')
+    assert request.trade_count == 1000
+    with pytest.raises(ValidationError):
+        WorkflowRequest(kind='generate',trade_count='')
+
+
+def test_damaged_run_does_not_hide_healthy_runs(prepared):
+    root, out = prepared
+    directory = root/'runs'/('run-'+'f'*20)
+    directory.mkdir()
+    path = directory/'manifest.json'
+    path.write_text('{}')
+    try:
+        client = TestClient(create_app(root))
+        response = client.get('/api/v1/runs')
+        assert response.status_code == 200
+        assert out['reference_run'] in {r['run_id'] for r in response.json()['items']}
+        assert any(e['artifact'] == directory.name for e in response.json()['errors'])
+        assert client.get('/health/ready').status_code == 200
+    finally:
+        path.unlink();directory.rmdir()

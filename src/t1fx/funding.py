@@ -155,13 +155,16 @@ def fixed_percentage(problem: FundingProblem, fraction: Decimal) -> FundingPlan:
 def optimize(problem: FundingProblem, *, policy_id: str = "scenario-lp-v1") -> FundingPlan:
     import numpy as np
     from scipy.optimize import linprog
+    from scipy.sparse import lil_matrix
 
     n, scenarios = len(problem.requirements), len(problem.probabilities)
     if not n:
         return _make_plan(problem, [], policy_id, "OPTIMAL", marginal=0.0)
     # x[0:n], then one shortfall per bucket/scenario. Amounts in whole currency units.
+    if n * scenarios > 250_000:
+        raise ValueError("Funding problem exceeds 250,000 pool/scenario combinations; reduce scenario count or cash pools")
     objective = np.zeros(n + n*scenarios)
-    constraints = np.zeros((n*scenarios+1, len(objective)))
+    constraints = lil_matrix((n*scenarios+1, len(objective)), dtype=float)
     rhs = np.zeros(n*scenarios+1)
     bounds = []
     for b, requirement in enumerate(problem.requirements):
@@ -178,6 +181,7 @@ def optimize(problem: FundingProblem, *, policy_id: str = "scenario-lp-v1") -> F
             rhs[row] = -float(whole(requirement.scenario_amounts_minor[w], requirement.bucket.currency))
     bounds.extend([(0, None)] * (n*scenarios))
     rhs[-1] = float(whole(problem.budget_minor, problem.base_currency))
+    constraints = constraints.tocsr()
     try:
         result = linprog(objective, A_ub=constraints, b_ub=rhs, bounds=bounds, method="highs")
         if not result.success or not np.isfinite(result.x).all():

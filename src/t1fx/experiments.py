@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from t1fx.datasets import validate_dataset
-from t1fx.domain import Scenario
+from t1fx.domain import Scenario, whole
 from t1fx.pipeline import _code_hash, run_comparison
 from t1fx.presentation import trade_labels
 from t1fx.storage import RunStore, canonical_bytes, digest
@@ -92,7 +92,7 @@ def run_experiment(root: Path, dataset_ids: list[str], budgets: list[int], *,
             trades_export.append({'dataset_id': dataset_id, 'scenario_id': scenario.scenario_id,
                 'trade_id': trade.trade_id, **trade_labels(record), 'side': 'Buy securities',
                 'settlement_currency': trade.bucket.currency,
-                'payment_due': str(Decimal(trade.settlement_amount_minor)/100),
+                'payment_due': str(whole(trade.settlement_amount_minor, trade.bucket.currency)),
                 'execution_utc': trade.executed_at.isoformat(),
                 'payment_deadline_utc': trade.contractual_deadline_at.isoformat(),
                 'funding_currencies': ', '.join(sorted({leg.sell_currency for leg in legs})),

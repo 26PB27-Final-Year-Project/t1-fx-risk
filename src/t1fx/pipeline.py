@@ -40,9 +40,8 @@ def run_comparison(scenario: Scenario, budget_minor: int, store: RunStore, *,
     base_currency = next(iter(settlement_currencies)) if len(settlement_currencies) == 1 else "EUR"
     currencies = set(settlement_currencies)
     currencies.update(source.currency for source in scenario.funding_sources)
-    fx_rate_snapshot = fx_rate_snapshot or fetch_rates(currencies, min(
-        scenario.decision_at.date() - timedelta(days=1), date.today() - timedelta(days=1),
-    ), base_currency=base_currency)
+    fx_rate_snapshot = fx_rate_snapshot or fetch_rates(currencies,
+        scenario.decision_at.date() - timedelta(days=1), base_currency=base_currency)
     if fx_rate_snapshot["base_currency"] != base_currency:
         raise ValueError("Saved rates disagree with settlement currency")
     base_rates = valuation_rates(fx_rate_snapshot, currencies)

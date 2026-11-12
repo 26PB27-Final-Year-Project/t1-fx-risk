@@ -59,6 +59,15 @@ def test_joint_currency_holiday():
     assert joint_value_date(date(2026, 10, 13), 2, (usd, eur)) == date(2026, 10, 16)
 
 
+def test_joint_value_date_excludes_payment_only_holidays():
+    holiday = date(2026, 11, 11)
+    calendar = profile(settlement_holidays=frozenset({holiday}))
+    assert calendar.is_business_day(holiday)
+    assert joint_value_date(date(2026, 11, 10), 1, (profile(), calendar)) == date(2026, 11, 12)
+    with pytest.raises(ValueError, match="closed currency calendar"):
+        joint_value_date(holiday, 0, (calendar, profile()))
+
+
 @pytest.mark.parametrize("mutation", ["duplicate_event", "duplicate_credit", "unfunded_fx"])
 def test_scenario_referential_integrity(mutation):
     data = three_trade_scenario().model_dump(mode="json")
@@ -71,3 +80,18 @@ def test_scenario_referential_integrity(mutation):
         data["funding_sources"][0]["capacity_minor"] = 0
     with pytest.raises(ValidationError):
         Scenario.model_validate(data)
+
+
+def test_payment_holiday_has_no_settlement_cutoff_but_allows_trading():
+    day = date(2026, 11, 11)
+    calendar = profile(settlement_holidays=frozenset({day}))
+    assert calendar.is_business_day(day)
+    assert calendar.cutoff_at(day, 'affirmation')
+    with pytest.raises(ValueError, match='closed payment day'):
+        calendar.cutoff_at(day, 'settlement')
+
+
+def test_local_instant_rejects_attached_timezone():
+    from datetime import UTC
+    with pytest.raises(ValueError, match='timezone-naive'):
+        local_instant(date(2026, 10, 13), time(12,tzinfo=UTC), 'Asia/Kolkata')

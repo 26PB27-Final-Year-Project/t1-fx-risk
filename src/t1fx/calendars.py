@@ -87,6 +87,8 @@ class CalendarProfile(Contract):
         if kind == "affirmation":
             local_time = self.affirmation_time
         elif kind == "settlement":
+            if not self.is_settlement_day(day):
+                raise ValueError("Settlement cutoff requested on a closed payment day")
             local_time = self.early_closes.get(day, self.settlement_time)
         else:
             raise ValueError(f"Unknown cutoff kind: {kind}")
@@ -95,6 +97,8 @@ class CalendarProfile(Contract):
 
 def local_instant(day: date, clock: time, timezone: str) -> datetime:
     """Reject ambiguous/nonexistent local times instead of silently selecting a fold."""
+    if clock.tzinfo is not None:
+        raise ValueError("Local clock must be timezone-naive; supply the timezone separately")
     naive = datetime.combine(day, clock)
     zone = ZoneInfo(timezone)
     candidates = {
@@ -112,7 +116,7 @@ def local_instant(day: date, clock: time, timezone: str) -> datetime:
 
 
 def joint_value_date(day: date, lag: int, calendars: tuple[CalendarProfile, ...]) -> date:
-    """Explicit simplified joint-business-day convention, not a universal FX rule."""
+    """Explicit simplified joint-payment-day convention, not a universal FX rule."""
     if not calendars or lag < 0:
         raise ValueError("A nonnegative lag and currency calendars are required")
     for calendar in calendars:
@@ -120,8 +124,8 @@ def joint_value_date(day: date, lag: int, calendars: tuple[CalendarProfile, ...]
     remaining = lag
     while remaining:
         day += timedelta(days=1)
-        if all([calendar.is_business_day(day) for calendar in calendars]):
+        if all([calendar.is_settlement_day(day) for calendar in calendars]):
             remaining -= 1
-    if not all([calendar.is_business_day(day) for calendar in calendars]):
+    if not all([calendar.is_settlement_day(day) for calendar in calendars]):
         raise ValueError("Value date falls on a closed currency calendar")
     return day

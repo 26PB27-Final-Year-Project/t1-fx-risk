@@ -97,7 +97,7 @@ def load_model(root: Path, model_id: str):
 def train_timing(root: Path, dataset_id: str):
     from t1fx.datasets import validate_dataset
 
-    manifest = validate_dataset(root, dataset_id)
+    manifest = validate_dataset(root, dataset_id, reuse_verified=True)
     directory = root / "datasets" / dataset_id
 
     def rows(name):

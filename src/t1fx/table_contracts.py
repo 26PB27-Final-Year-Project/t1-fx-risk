@@ -1,7 +1,7 @@
 """Storage contracts shared by canonical JSON and the optional Arrow adapter."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -177,4 +177,16 @@ def read_parquet(path: Path, contract: TableContract) -> list[dict]:
     if not table.schema.equals(schema, check_metadata=True):
         raise ValueError(f"{contract.name}: Parquet schema mismatch")
     table.validate(full=True)
-    return contract.normalize(table.to_pylist())
+    # The verified schema fixes timestamps to UTC microseconds. Avoid Arrow's
+    # per-scalar timezone lookup (including repeated optional-module imports).
+    import pyarrow as pa
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    columns = {}
+    for column in contract.columns:
+        values = table[column.name]
+        if column.kind == "timestamp":
+            columns[column.name] = [None if value is None else epoch + timedelta(microseconds=value)
+                                    for value in values.cast(pa.int64()).to_pylist()]
+        else:
+            columns[column.name] = values.to_pylist()
+    return contract.normalize([dict(zip(columns, values)) for values in zip(*columns.values())])

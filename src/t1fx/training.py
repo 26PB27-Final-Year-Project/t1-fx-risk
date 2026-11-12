@@ -169,7 +169,7 @@ def report_predictions(rows, labels, x, trades, booster, logistic, calibration):
 
 
 def train_model(root: Path, dataset_id: str):
-    manifest = validate_dataset(root, dataset_id)
+    manifest = validate_dataset(root, dataset_id, reuse_verified=True)
     directory = root/'datasets'/dataset_id
     # Features consume only these declared public tables; outcomes enter as labels or dated history.
     tables = {name: json.loads((directory/manifest['tables'][name]['json']).read_text())

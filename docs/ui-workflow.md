@@ -69,6 +69,63 @@ The simulator replays stored events. The risk model estimates failure under zero
 
 ## Loading and validation
 
+After dataset generation, the interface refreshes datasets without reloading every model bundle, retains the loaded model catalog, and selects the generated dataset for training. A loading status remains visible until the catalog refresh finishes. Initial visits and completed training still load the complete catalog. Dataset integrity validation remains mandatory.
+
+Page guides explain the controls and the interpretation of each page's results. Model health remains available for frozen test metrics, reliability and provenance. The experiment intro link was removed; the four stage links provide navigation.
+
 The Trades page initially shows deadline order so stored trade rows can load while forecasts are calculated. Explicit probability sorting returns the same forecast used to order its page, avoiding a second inference request. Evaluation controls and the schedule share an in-flight context request. Observable FX legs are indexed once per request by trade and cash pool.
 
 Catalog and compatibility reads can reuse successful dataset semantic checks in a bounded process-local memo. Every call still verifies manifest identity and hashes every listed file; the memo key also includes the complete manifest and scenario filename set. Changed files invalidate reuse or fail checksums. First reads and normal standalone validation perform full table/Parquet/chronology checks. No timestamp-only validation cache is used. Process restart clears the memo, so the first catalog read can take longer than later reads.
+
+Dataset catalog summaries and parsed held-out scenarios now use a bounded 32-entry process-local cache after mandatory byte verification. Returned values are copied, so downstream operations cannot change shared cached objects. Concurrent reads serialize cold validation to avoid duplicate work. Catalog refresh no longer reloads models after comparison-only jobs, and restoring an already-applied completed job does not trigger a second catalog refresh. Eligibility requests wait 300 ms after edits; execution still revalidates independently.
+
+Cold validation computes each canonical table hash once. The Parquet adapter converts schema-verified UTC microseconds directly instead of repeating timezone resolution for every scalar, preserving nulls and exact microseconds. A local measurement over four existing datasets (approximately 193 MB) reduced cold catalog validation from 42.2 to 10.7 seconds; repeat reads took 0.11 seconds. These are local measurements, not latency guarantees. Restarting the API still requires full validation; training and provider requests have separate costs.
+
+Repeated workspace labels and section introductions were removed. Assumptions, cancellation semantics, provenance and interpretation remain in expandable details. Single-budget experiment comparisons use policy bars; multiple-budget comparisons use lines. Scenarios shows separate cost and missed-deadline charts, with the exact table retained to avoid conflating money and counts.
+
+Model health shows the relevant held-out score columns and a reliability line chart (predicted probability versus observed frequency, with a perfect-agreement diagonal). Empty bins are omitted from the expandable calibration table; a single populated bin is shown as one point, not an invented curve. Single-outcome evaluation is explicitly flagged. Timing reports omit ROC/PR-AUC columns because the timing evaluator does not publish those metrics. Full frozen reports and provenance remain available under one disclosure; no saved metrics are rewritten.
+
+Generation distributes the requested total evenly across the selected trading days: each day receives the integer quotient, with one extra trade on each of the first remainder days. Thus 10,000 trades over 30 trading days means 334 on the first 10 days and 333 on the remaining 20. Partition recovery gaps do not create extra trades.
+
+## Interface audit — 12 November 2026
+
+The five pages were reviewed for navigation, control states, validation, loading/error recovery, keyboard access, themes and responsive layouts. Fixed issues:
+
+- Missing saved Funding jobs now clear their persisted references and unlock recomputation instead of polling forever with a disabled submit button.
+- Evaluation jobs retain their references across page refreshes. Temporary polling errors retry; missing jobs clear safely; completed jobs without result references produce an actionable error.
+- Run-list errors remain visible on Experiments with a retry action. Run refreshes reject stale responses and disable repeat clicks while loading.
+- Calendar popovers reopen on the selected date rather than the previously browsed month.
+- Trade schedule failures are reported instead of silently displaying an empty schedule.
+- Reset filters returns to the default deadline ordering. Late responses from obsolete model-eligibility requests cannot replace current errors.
+
+Acceptance coverage includes generation, real training, eligibility, funding and evaluation jobs, cancellation, refresh recovery, exports, dropdown keyboard operation, light/dark contrast and layouts from 320px to desktop. Chromium automation and rendered screenshots were used; physical devices and Safari/Firefox were not exercised. The production build retains Vite's existing large JavaScript chunk warning.
+
+Experiment model pickers list only models that pass backend compatibility checks for the selected held-out day. They remain disabled while checks are pending. If a saved selection fails those checks, it is cleared with a notice; no replacement model is silently selected. Rejected-model explanations are grouped under **Why some models are hidden**. Users can select a compatible earlier-trained model, choose an eligible later test day, or train models on the selected dataset. Model-free funding comparison remains available with expected receipt times. Backend execution still independently enforces calibration/training-label maturity, integrity and route coverage.
+
+## Generation and time corrections — 12 November 2026
+
+Generation preflight now follows the actual whole-day partition schedule, including settlement holidays and recovery windows, instead of rejecting dates against an overestimated horizon. It validates execution/settlement windows, route calendar coverage and normal/missed-cutoff booking boundaries before requesting FX data. Preview and generation use matching deadlines and maturity instants. API preview/submission and worker generation checks use the online UTC date; omitted start dates are resolved against that same clock provider. Explicit dates remain subject to validation.
+
+Settlement cutoffs are unavailable on payment holidays even when securities trading is open. Trading execution is not constrained by that day's payment-system cutoff. Local-clock conversion rejects already timezone-aware clock values; ambiguous/nonexistent DST times continue to be rejected. Missed-cutoff generation uses the FX route's local booking date and cannot move a booking earlier than its normal booking time. Historical reference selection uses UTC rather than the computer's local date. FX sell amounts respect the settlement currency's minor-unit exponent, including JPY.
+
+Route assignment continues across generation days so small daily cohorts do not repeatedly use only the first currencies. A day with fewer trades than routes still cannot contain every route; coverage is across the dataset. Existing immutable datasets are not rewritten. Generate a new dataset to use the corrected generation behavior.
+
+The evaluation picker rounds its lower bound up to the first valid whole minute and respects the exclusive end instant, including subsecond ends. The backend remains authoritative for timezone/DST validity and evaluation-time bounds.
+
+FX route booking rollovers and joint value dates also respect separately configured payment holidays on both currency calendars. A day can be open for trading while closed for FX payment scheduling. Existing immutable datasets retain their original schedules; generate a new release to apply this correction.
+
+## Dataset loading and reuse
+
+Catalog browsing verifies the manifest identity, every listed file checksum, configuration/schema identities and report identity, then reads display metadata and held-out scenarios. It does not grant training eligibility or populate the full-validation cache. Eligibility, submission and execution retain full semantic validation; training and timing reuse successful semantic checks only after all file bytes are verified again. No timestamp-only trust or persistent validation bypass is used.
+
+The Experiments model pickers use a bounded typed `POST /api/v1/workflow/model-choices` request instead of one request per model. Each batch verifies the dataset once and replays the decision-time snapshot once for its risk models, while checking each model independently with the same compatibility logic used during execution. The selected comparison is separately validated before submission and again by the worker.
+
+Frontend recovery: failed catalog reads offer **Retry loading datasets** without discarding the draft. Failed or incomplete model-choice responses offer **Retry model checks** and keep comparison disabled. Large model lists are checked sequentially in batches of at most 100 risk and 100 timing models, with actual completed counts. Switching the dataset or test day aborts obsolete browser requests and ignores stale responses; this does not claim that server computation has stopped. A failed post-job catalog refresh is retried before the job outputs are marked applied.
+
+## Workflow date and validation consistency
+
+Request parsing does not derive dates from the host clock. Generation resolves an omitted start date only when needed, using the online UTC clock in both API validation and worker execution. The worker resolves its generation configuration once per attempt. Online clock failure is reported instead of silently falling back to the system date. Historical FX requests use the booking day’s preceding UTC date without clamping it to the host date.
+
+Training/comparison requests for existing datasets do not calculate generation defaults. Retry checkpoints with completed datasets validate and reuse those artifacts without needing a new generation window. Full semantic dataset checks are reused throughout a worker attempt, including final experiment publication, while every validation still verifies current file checksums.
+
+The dependency lock targets Python 3.11 exclusively. CI uses `uv sync --locked` to reject future configuration/lock mismatches.

@@ -2,16 +2,22 @@
 import csv
 import io
 import json
+import re
+from functools import lru_cache
+from copy import deepcopy
+from threading import RLock
 from datetime import date, datetime, UTC, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from t1fx.datasets import validate_dataset
+from t1fx.datasets import dataset_manifest, validate_dataset
 from t1fx.domain import Scenario
 from t1fx.generation import GenerationConfig, load_config
 from t1fx.storage import RunStore
+from t1fx.online_clock import online_time
 
 ID = r'^dataset-[0-9a-f]{20}$'
 SCENARIO = r'^[a-zA-Z0-9_.-]{1,160}$'
@@ -53,8 +59,6 @@ class WorkflowRequest(BaseModel):
 
     @model_validator(mode='after')
     def coherent(self):
-        if self.start_date is None:
-            self.start_date = recommended_start(datetime.now(UTC).date(), self.trading_days)
         if self.kind == 'generate' and self.dataset_id is not None:
             raise ValueError('Dataset generation creates a new release; omit dataset_id')
         if self.trade_count < self.trading_days:
@@ -68,27 +72,57 @@ class WorkflowRequest(BaseModel):
         return self
 
 
-def generation_config(request):
+def generation_config(request, *, today=None):
     config = load_config(Path(__file__).resolve().parents[2]/'configs/generation/smoke.json')
     data = config.model_dump() | {key: getattr(request, key) for key in (
         'start_date','trade_count','trading_days','seed','opening_cash_fraction',
         'funding_stress_rate','late_confirmation_rate','ssi_mismatch_rate')}
+    today = today or datetime.fromisoformat(online_time()['utc_now']).astimezone(UTC).date()
+    data['start_date'] = request.start_date or recommended_start(today, request.trading_days)
     config = GenerationConfig.model_validate(data)
-    # Conservative complete horizon check before the first network request.
-    end = config.market.advance(config.start_date, config.trading_days + 4*(config.recovery_business_days+2))
-    if end >= datetime.now(UTC).date():
-        raise ValueError('Choose an earlier start date: all partitions and recovery gaps must finish before today')
-    for route in config.fx_routes:
-        route.sell_calendar.require_coverage(end)
-        route.buy_calendar.require_coverage(end)
+    # Validate the same schedule used by preview and generation, not a padded estimate.
+    from t1fx.generation import generation_schedule
+    from t1fx.calendars import local_instant
+    for day, _, _ in generation_schedule(config):
+        settlement = config.market.settlement_date(day)
+        end_day = config.market.advance_settlement(settlement, config.recovery_business_days)
+        end = config.market.cutoff_at(end_day, 'settlement')
+        if end.date() >= today:
+            raise ValueError('Choose an earlier start date: all partitions and recovery gaps must finish before today')
+        start = local_instant(day, config.arrival_open, config.market.timezone)
+        close = local_instant(day, min(config.arrival_close, config.market.trading_early_closes.get(day, config.arrival_close)), config.market.timezone)
+        if close <= start:
+            raise ValueError('Trading close must be after the execution window opens')
+        decision = local_instant(settlement, config.decision_time, config.market.timezone)
+        window_day = settlement
+        while True:
+            opening = local_instant(window_day, config.settlement_open, config.market.timezone)
+            cutoff = config.market.cutoff_at(window_day, 'settlement')
+            if opening >= cutoff or (window_day == settlement and decision >= opening):
+                raise ValueError('Early-close override is incompatible with the configured decision window')
+            if window_day == end_day:
+                break
+            window_day = config.market.advance_settlement(window_day, 1)
+        for route in config.fx_routes:
+            for calendar in (route.sell_calendar, route.buy_calendar):
+                calendar.require_coverage(start.astimezone(ZoneInfo(route.timezone)).date())
+                calendar.require_coverage(end.astimezone(ZoneInfo(route.timezone)).date())
+            # Validate normal and missed-cutoff bookings at both execution boundaries.
+            for executed in (start, close):
+                booked = executed + timedelta(minutes=10)
+                route_day = booked.astimezone(ZoneInfo(route.timezone)).date()
+                missed = max(booked, local_instant(route_day, route.booking_cutoff, route.timezone)+timedelta(minutes=30))
+                route.expected_credit(booked)
+                route.expected_credit(missed)
+
     return config
 
 
-def generation_preview(request):
+def generation_preview(request, *, today=None):
     """Resolve deadlines without generating trades or contacting FX providers."""
     from t1fx.generation import generation_schedule
     from t1fx.calendars import local_instant
-    config = generation_config(request)
+    config = generation_config(request, today=today)
     rows = []
     for day, count, split in generation_schedule(config):
         settlement = config.market.settlement_date(day)
@@ -101,12 +135,52 @@ def generation_preview(request):
             'schedule': rows, 'configuration': config.model_dump(mode='json')}
 
 
-def dataset_scenarios(root, dataset_id):
-    manifest = validate_dataset(root, dataset_id, reuse_verified=True)
-    directory = root/'datasets'/dataset_id
+@lru_cache(maxsize=32)
+def _parsed_dataset(directory: Path, manifest_json: str):
+    """Reuse parsing only AFTER the caller has verified all artifact bytes."""
+    manifest = json.loads(manifest_json)
     trades = json.loads((directory/manifest['tables']['trades']['json']).read_text())
     ids = sorted({t['scenario_id'] for t in trades if t['split']=='test'})
-    return manifest, [Scenario.model_validate_json((directory/'scenarios'/f'{i}.json').read_text()) for i in ids]
+    if any(not re.fullmatch(SCENARIO, i) or f'scenarios/{i}.json' not in manifest['files'] for i in ids):
+        raise ValueError('Invalid dataset scenario reference')
+    scenarios = [Scenario.model_validate_json((directory/'scenarios'/f'{i}.json').read_text()) for i in ids]
+    config = json.loads((directory/'resolved_config.json').read_text())
+    outcomes = json.loads((directory/manifest['tables']['outcomes']['json']).read_text())
+    balance = {split: {'failed': 0, 'total': 0} for split in ('train','tuning','calibration','test')}
+    for row in outcomes:
+        balance[row['split']]['total'] += 1
+        balance[row['split']]['failed'] += bool(row['missed_contractual_deadline'])
+    entry = {'outcome_balance': balance, 'dataset_id': manifest['dataset_id'],
+        'name': f"{manifest['summary']['trade_count']} trades · {config['start_date']} · seed {config['seed']}",
+        'summary': manifest['summary'], 'configuration': config,
+        'scenarios': [{'scenario_id': s.scenario_id, 'decision_at': s.decision_at.isoformat(),
+            'deadline_at': max(t.contractual_deadline_at for t in s.trades).isoformat(),
+            'ends_at': s.ends_at.isoformat(),
+            'name': f"{s.trades[0].executed_at.date()} · {len(s.trades)} trades · USD", 'currency': 'USD'} for s in scenarios]}
+    return scenarios, entry
+
+
+# Prevent simultaneous catalog/eligibility requests from duplicating cold validation.
+_DATASET_READ_LOCK = RLock()
+
+
+def _verified_dataset(root, dataset_id):
+    with _DATASET_READ_LOCK:
+        manifest = validate_dataset(root, dataset_id, reuse_verified=True)
+        parsed = _parsed_dataset((Path(root)/'datasets'/dataset_id).resolve(), json.dumps(manifest, sort_keys=True))
+        return manifest, parsed
+
+
+def dataset_scenarios(root, dataset_id):
+    manifest, (scenarios, _) = _verified_dataset(root, dataset_id)
+    # Solvers and callers must never mutate shared cached scenario objects.
+    return manifest, [scenario.model_copy(deep=True) for scenario in scenarios]
+
+
+def dataset_catalog_entry(root, dataset_id):
+    manifest = dataset_manifest(root, dataset_id)
+    _, entry = _parsed_dataset((Path(root)/'datasets'/dataset_id).resolve(), json.dumps(manifest, sort_keys=True))
+    return deepcopy(entry)
 
 
 def ensure_timing_compatible(root, model_id, scenario):
@@ -120,14 +194,23 @@ def ensure_timing_compatible(root, model_id, scenario):
     return model
 
 
-def compatibility(root, request):
+def compatibility(root, request, *, today=None):
     """The same integrity/runtime/maturity checks gate eligibility and execution."""
     reasons = []
     try:
         if not request.dataset_id:
-            generation_config(request)
+            generation_config(request, today=today)
             return {'eligible': True, 'reasons': []}
         _, scenarios = dataset_scenarios(root, request.dataset_id)
+        return _scenario_compatibility(root, request, scenarios, {})
+    except (ValueError, RuntimeError, OSError, ImportError, KeyError) as exc:
+        reasons.append(str(exc))
+    return {'eligible': not reasons, 'reasons': reasons}
+
+
+def _scenario_compatibility(root, request, scenarios, replay):
+    reasons = []
+    try:
         if request.kind in ('compare','sensitivity','prepare'):
             scenario = next((s for s in scenarios if s.scenario_id == request.scenario_id),
                             scenarios[0] if request.kind=='prepare' and request.scenario_id is None and scenarios else None)
@@ -142,13 +225,36 @@ def compatibility(root, request):
                 from t1fx.simulator import simulate
                 from t1fx.snapshots import build_snapshots
                 model = RiskModel(root, request.risk_model_id)
-                rows = [s.model_dump(mode='json') | {'reference_policy_id':'fixed-0'} for s in build_snapshots(simulate(scenario, until=scenario.decision_at),scenario.decision_at)]
-                model.predict(rows, {t.trade_id:t.model_dump(mode='json') for t in scenario.trades})
+                if 'rows' not in replay:
+                    replay['rows'] = [s.model_dump(mode='json') | {'reference_policy_id':'fixed-0'} for s in build_snapshots(simulate(scenario, until=scenario.decision_at),scenario.decision_at)]
+                model.predict(replay['rows'], {t.trade_id:t.model_dump(mode='json') for t in scenario.trades})
             if request.timing_model_id and request.kind != 'prepare':
                 ensure_timing_compatible(root,request.timing_model_id,scenario)
     except (ValueError, RuntimeError, OSError, ImportError, KeyError) as exc:
         reasons.append(str(exc))
     return {'eligible': not reasons, 'reasons': reasons}
+
+
+
+class ModelChoicesRequest(WorkflowRequest):
+    kind: Literal['compare'] = 'compare'
+    risk_model_ids: list[Annotated[str, Field(pattern=r'^model-[0-9a-f]{20}$')]] = Field(default_factory=list, max_length=100)
+    timing_model_ids: list[Annotated[str, Field(pattern=r'^timing-[0-9a-f]{20}$')]] = Field(default_factory=list, max_length=100)
+
+
+def model_choices(root, request):
+    ids = [(id, 'risk_model_id') for id in request.risk_model_ids] + [(id, 'timing_model_id') for id in request.timing_model_ids]
+    try:
+        _, scenarios = dataset_scenarios(root, request.dataset_id)
+    except (ValueError, RuntimeError, OSError, ImportError, KeyError) as exc:
+        return {id: [str(exc)] for id, _ in ids}
+    replay = {}
+    result = {}
+    for id, field in ids:
+        choice = request.model_copy(update={'risk_model_id': None, 'timing_model_id': None, field: id})
+        check = _scenario_compatibility(root, choice, scenarios, replay)
+        result[id] = check['reasons']
+    return result
 
 
 def execute_job(root, payload, checkpoint, progress):
@@ -167,16 +273,24 @@ def _execute_job(root, payload, checkpoint, progress):
     from t1fx.timing import train_timing, load_model
     from t1fx.training import train_model
     request = WorkflowRequest.model_validate(payload)
-    check = compatibility(root, request)
-    if not check['eligible']:
-        raise ValueError('; '.join(check['reasons']))
     outputs = dict((checkpoint or {}).get('outputs', {}))
+    dataset_id = request.dataset_id or outputs.get('dataset_id')
+    resolved_generation = None
+    if not dataset_id:
+        # Resolve once against the same online clock provider used by submission.
+        # Retrying completed generation uses its immutable output, not new dates.
+        resolved_generation = generation_config(request)
+        request = request.model_copy(update={'start_date': resolved_generation.start_date})
+    else:
+        check = compatibility(root, request.model_copy(update={'dataset_id': dataset_id}))
+        if not check['eligible']:
+            raise ValueError('; '.join(check['reasons']))
     def save(stage, key, action):
         progress(stage, outputs)
         if key not in outputs:
             outputs[key] = action()
         if key=='dataset_id':
-            validate_dataset(root,outputs[key])
+            validate_dataset(root,outputs[key], reuse_verified=True)
         elif key=='risk_model_id':
             from t1fx.models import RiskModel
             RiskModel(root,outputs[key])
@@ -187,10 +301,9 @@ def _execute_job(root, payload, checkpoint, progress):
                 RunStore(root).validate(run['run_id'])
         progress(stage+' completed', outputs)
         return outputs[key]
-    dataset_id = request.dataset_id or outputs.get('dataset_id')
     if request.kind in ('generate','prepare') and not dataset_id:
-        dataset_id = save('Generating dataset', 'dataset_id', lambda: generate_release(generation_config(request),root,'auto')['dataset_id'])
-    validate_dataset(root,dataset_id)
+        dataset_id = save('Generating dataset', 'dataset_id', lambda: generate_release(resolved_generation,root,'auto')['dataset_id'])
+    validate_dataset(root,dataset_id, reuse_verified=True)
     outputs['dataset_id'] = dataset_id
     if request.kind in ('train-risk','train-both','prepare'):
         save('Training settlement risk model', 'risk_model_id', lambda: train_model(root,dataset_id)['model_id'])
@@ -241,7 +354,7 @@ def _execute_job(root, payload, checkpoint, progress):
                     'failure_reasons':dict(Counter(reason for outcome in outcomes for reason in outcome['failure_reasons'])),
                     'missed_deadlines':run['failed_count'],'replay_cost':run['total_cost']}
     record = {'replay_evidence':evidence,'configuration':request.model_dump(mode='json'),'outputs':outputs,
-              'decision_at':scenario.decision_at.isoformat(), 'dataset_manifest':validate_dataset(root,dataset_id),
+              'decision_at':scenario.decision_at.isoformat(), 'dataset_manifest':validate_dataset(root,dataset_id, reuse_verified=True),
               'code_hash':_code_hash(),'dependencies':reference_manifest['environment'],
               'model_evaluation':evaluation,
               'limitations':['Synthetic data and assumed costs.','Risk probabilities describe zero extra reserve; they do not drive the LP.',

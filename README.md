@@ -88,7 +88,7 @@ Timestamps are timezone-aware UTC. The engine uses integer minor currency units;
 
 Internet access is needed for uncached FX prices and online time. Use **Check provider connectivity** in Experiments to diagnose provider failures. Synthetic accuracy is not evidence of real-world performance; repeated timing draws are not independent test days.
 
-The first catalog load validates dataset contents and may take longer for large datasets. Subsequent reads reuse successful semantic checks while still verifying artifact checksums. Restarting the application clears this in-memory cache.
+The dataset list verifies file checksums and reads display metadata without decoding every table. Full table and chronological validation runs before eligibility checks and execution; successful checks are reused within the process, with file checksums still verified on every read. Model choices share one dataset validation and decision-time replay per batch. The first operation after restarting can therefore take longer than browsing or later operations.
 
 ## Troubleshooting
 

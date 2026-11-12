@@ -16,7 +16,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - if: runner.os == 'macOS'
         run: brew install libomp
-      - run: uv sync --frozen --extra ml --extra parquet
+      - run: uv sync --locked --extra ml --extra parquet
       - run: uv run --frozen --extra ml --extra parquet python -m pytest
       - run: uv run --frozen python -m compileall -q src
 
@@ -33,7 +33,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --frozen --extra ml --extra parquet
+      - run: uv sync --locked --extra ml --extra parquet
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
       - run: npx playwright install --with-deps chromium

@@ -12,6 +12,9 @@ import t1fx.api
 t1fx.api.online_time = lambda: {'utc_now': datetime.now(UTC).isoformat(),
                               'source': 'test://online-clock', 'stale': False}
 
+import t1fx.workflow
+t1fx.workflow.online_time = t1fx.api.online_time
+
 from t1fx.api import create_app
 from t1fx.fixtures import three_trade_scenario
 from t1fx.pipeline import run_comparison

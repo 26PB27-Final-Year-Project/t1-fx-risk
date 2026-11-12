@@ -3,7 +3,7 @@
 import hashlib
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Literal
@@ -47,7 +47,7 @@ class FXRouteProfile(Contract):
         calendars = (self.sell_calendar, self.buy_calendar)
 
         def open_day(candidate):
-            return all([calendar.is_business_day(candidate) for calendar in calendars])
+            return all([calendar.is_settlement_day(candidate) for calendar in calendars])
 
         # A closed day or a booking strictly after cutoff rolls to the next joint day.
         if not open_day(day) or booked_at > local_instant(day, self.booking_cutoff, self.timezone):
@@ -173,7 +173,7 @@ def reference_snapshot(currencies, day, base):
     return snapshot
 
 
-def generate_day(config: GenerationConfig, day: date, count: int, split: str) -> GeneratedDay:
+def generate_day(config: GenerationConfig, day: date, count: int, split: str, *, route_offset: int = 0) -> GeneratedDay:
     market = config.market
     settlement_day = market.settlement_date(day)
     deadline = market.cutoff_at(settlement_day, "settlement")
@@ -185,8 +185,6 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         raise ValueError("Trading close must be after the execution window opens")
     if not decision < settlement_open < deadline:
         raise ValueError("Early-close override is incompatible with the configured decision window")
-    if close >= market.cutoff_at(day, "settlement"):
-        raise ValueError("Execution window crosses the market's configured close")
     end_day = market.advance_settlement(settlement_day, config.recovery_business_days)
     end = market.cutoff_at(end_day, "settlement")
     scenario_id = f"{config.config_id}-s{config.seed}-{day.isoformat()}"
@@ -263,26 +261,26 @@ def generate_day(config: GenerationConfig, day: date, count: int, split: str) ->
         if flags["funding_stress"]:
             prefund *= 1-config.funding_stress_fraction
         cash[bucket] += int(prefund)
-        route = config.fx_routes[index % len(config.fx_routes)]
+        route = config.fx_routes[(route_offset + index) % len(config.fx_routes)]
         # FX replenishes the contractual obligation; opening cash is a separate initial resource.
         booked = executed + timedelta(minutes=10)
         if flags["missed_fx_cutoff"]:
-            booked = local_instant(day, route.booking_cutoff, route.timezone)
-            booked += timedelta(minutes=30)
+            route_day = booked.astimezone(ZoneInfo(route.timezone)).date()
+            booked = max(booked, local_instant(route_day, route.booking_cutoff, route.timezone) + timedelta(minutes=30))
         booked = max(booked, executed)
         expected = route.expected_credit(booked)
         from t1fx.domain import CURRENCY_EXPONENT
 
         # Use the preceding day's published reference, avoiding same-day publication lookahead.
         from t1fx.fx_rates import valuation_rates
-        pricing_date = min(booked.date() - timedelta(days=1), date.today())
+        pricing_date = booked.astimezone(UTC).date() - timedelta(days=1)
         price_key = (tuple(sorted(r.sell_currency for r in config.fx_routes)), pricing_date, route.buy_currency)
         if price_key not in daily_prices:
             daily_prices[price_key] = reference_snapshot(*price_key)
         snapshot = daily_prices[price_key]
         rate = valuation_rates(snapshot, {route.sell_currency})[route.sell_currency]
         quote = next(row for row in snapshot["observations"] if row["currency"] == route.sell_currency)
-        sell_amount = int((Decimal(amount).scaleb(-2) / rate).scaleb(
+        sell_amount = int((Decimal(amount).scaleb(-CURRENCY_EXPONENT[route.buy_currency]) / rate).scaleb(
             CURRENCY_EXPONENT[route.sell_currency],
         ).to_integral_value(rounding=ROUND_CEILING))
         source_totals[route.sell_currency] = source_totals.get(route.sell_currency, 0) + sell_amount
@@ -362,5 +360,7 @@ def generation_schedule(config: GenerationConfig):
 
 def generate_dataset(config: GenerationConfig):
     """Whole-day partitions with recovery-horizon embargo between partitions."""
+    route_offset = 0
     for day, count, split in generation_schedule(config):
-        yield generate_day(config, day, count, split)
+        yield generate_day(config, day, count, split, route_offset=route_offset)
+        route_offset += count

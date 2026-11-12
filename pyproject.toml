@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "t1-fx-risk"
 version = "0.1.0"
 description = "Reproducible T+1 settlement simulation and FX funding research engine"
-requires-python = ">=3.11,<3.15"
+requires-python = "==3.11.*"
 dependencies = [
   "pydantic>=2.9,<3",
   "numpy>=2.1,<3",

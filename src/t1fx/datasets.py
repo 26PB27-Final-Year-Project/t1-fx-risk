@@ -258,7 +258,11 @@ _VALIDATED = OrderedDict()
 _VALIDATED_LOCK = Lock()
 
 
-def validate_dataset(root: Path, dataset_id: str, *, reuse_verified: bool = False) -> dict:
+def dataset_manifest(root: Path, dataset_id: str) -> dict:
+    """Verify artifact bytes and display metadata without decoding every table.
+
+    Browsing is not training eligibility: execution must call validate_dataset.
+    """
     directory = _directory(root, dataset_id)
     manifest = json.loads((directory/"manifest.json").read_text())
     if (manifest.get("dataset_id") != dataset_id or manifest.get("status") != "SUCCEEDED"
@@ -275,12 +279,29 @@ def validate_dataset(root: Path, dataset_id: str, *, reuse_verified: bool = Fals
         raise ValueError("Dataset table set mismatch")
     if not {"resolved_config.json", "schemas.json", "validation.json", "data-card.md"} <= set(manifest["files"]):
         raise ValueError("Dataset metadata files missing")
+    for name, contract in TABLES.items():
+        entry = manifest["tables"][name]
+        prefix = "simulation_truth" if contract.private else "tables"
+        if entry["json"] != f"{prefix}/{name}.json" or entry["json"] not in manifest["files"]:
+            raise ValueError("Unexpected table path in manifest")
     for name, checksum in manifest["files"].items():
         path = directory/name
         if not path.resolve().is_relative_to(directory.resolve()):
             raise ValueError("Artifact path escapes dataset directory")
         if not path.is_file() or _hash_file(path) != checksum:
             raise ValueError(f"Dataset checksum mismatch: {name}")
+    for name, identity_key in (("resolved_config.json", "config_hash"), ("schemas.json", "schema_hash")):
+        if digest(json.loads((directory/name).read_text())) != manifest["identity"][identity_key]:
+            raise ValueError("Dataset metadata identity mismatch")
+    if digest(manifest["summary"]) != manifest["identity"]["report_hash"]:
+        raise ValueError("Dataset report identity mismatch")
+    return manifest
+
+
+def validate_dataset(root: Path, dataset_id: str, *, reuse_verified: bool = False) -> dict:
+    directory = _directory(root, dataset_id)
+    manifest = dataset_manifest(root, dataset_id)
+    parquet = "parquet" in manifest["identity"]["formats"]
     scenario_names = tuple(sorted(path.name for path in (directory/'scenarios').glob('*.json')))
     cache_key = (str(directory.resolve()), digest(manifest), scenario_names)
     if reuse_verified:
@@ -297,13 +318,14 @@ def validate_dataset(root: Path, dataset_id: str, *, reuse_verified: bool = Fals
         if entry["json"] != f"{prefix}/{name}.json" or entry["json"] not in manifest["files"]:
             raise ValueError("Unexpected table path in manifest")
         rows = contract.normalize(json.loads((directory/entry["json"]).read_text()))
-        if (digest(rows) != manifest["identity"]["table_hashes"][name]
-                or digest(rows) != entry["canonical_sha256"] or len(rows) != entry["rows"]):
+        canonical_hash = digest(rows)
+        if (canonical_hash != manifest["identity"]["table_hashes"][name]
+                or canonical_hash != entry["canonical_sha256"] or len(rows) != entry["rows"]):
             raise ValueError(f"Dataset table identity mismatch: {name}")
         if "parquet" in entry:
             if entry["parquet"] != f"{prefix}/{name}.parquet" or entry["parquet"] not in manifest["files"]:
                 raise ValueError("Unexpected Parquet path in manifest")
-            if digest(read_parquet(directory/entry["parquet"], contract)) != digest(rows):
+            if digest(read_parquet(directory/entry["parquet"], contract)) != canonical_hash:
                 raise ValueError(f"Parquet contents differ from canonical data: {name}")
         tables[name] = rows
     if validate_tables(tables) != manifest["summary"]:

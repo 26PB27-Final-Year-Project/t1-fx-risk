@@ -447,7 +447,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             raise HTTPException(404, "Funding plan not found in this run.")
         return result
 
-    from t1fx.workflow import WorkflowRequest, compatibility, dataset_scenarios, export_record
+    from t1fx.workflow import WorkflowRequest, ModelChoicesRequest, model_choices, compatibility, dataset_catalog_entry, export_record
     from fastapi.responses import Response
 
     @app.get('/api/v1/workflow/defaults')
@@ -461,12 +461,25 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
             raise HTTPException(422, f'Current-date defaults exceed saved calendar coverage: {exc}') from exc
         return {'today': today.isoformat(), 'start_date': start.isoformat(), 'source': clock['source']}
 
+    def generation_today(body):
+        # Resolve implicit generation dates against the same clock as the UI.
+        if body.dataset_id:
+            return None
+        from t1fx.workflow import recommended_start
+        today = datetime.fromisoformat(online_time()['utc_now']).date()
+        if 'start_date' not in body.model_fields_set or body.start_date is None:
+            try:
+                body.start_date = recommended_start(today, body.trading_days)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        return today
+
     @app.post('/api/v1/workflow/preview')
     def workflow_preview(body:WorkflowRequest,request:Request):
         require_local_origin(request)
         from t1fx.workflow import generation_preview
         try:
-            return generation_preview(body)
+            return generation_preview(body, today=generation_today(body))
         except (ValueError, OSError) as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -475,24 +488,15 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         return {'api': 'available', 'worker': jobs.worker_health()}
 
     @app.get('/api/v1/workflow/catalog')
-    def workflow_catalog():
+    def workflow_catalog(include_models: bool = True):
         datasets, errors = [], []
         for path in sorted((store.root/'datasets').glob('dataset-*/manifest.json'), key=lambda p:-p.stat().st_mtime_ns):
             try:
-                manifest, scenarios = dataset_scenarios(store.root,path.parent.name)
-                directory=path.parent
-                config=json.loads((directory/'resolved_config.json').read_text())
-                outcomes=json.loads((directory/manifest['tables']['outcomes']['json']).read_text())
-                balance={split:{'failed':sum(bool(r['missed_contractual_deadline']) for r in outcomes if r['split']==split),
-                    'total':sum(r['split']==split for r in outcomes)} for split in ('train','tuning','calibration','test')}
-                datasets.append({'outcome_balance':balance,'dataset_id':path.parent.name,'name':f"{manifest['summary']['trade_count']} trades · {config['start_date']} · seed {config['seed']}",
-                    'summary':manifest['summary'], 'configuration':config,
-                    'scenarios':[{'scenario_id':s.scenario_id,'decision_at':s.decision_at.isoformat(),'deadline_at':max(t.contractual_deadline_at for t in s.trades).isoformat(),'ends_at':s.ends_at.isoformat(),
-                        'name':f"{s.trades[0].executed_at.date()} · {len(s.trades)} trades · USD", 'currency':'USD'} for s in scenarios]})
+                datasets.append(dataset_catalog_entry(store.root, path.parent.name))
             except (ValueError,OSError,KeyError) as exc:
                 errors.append({'artifact':path.parent.name,'message':str(exc)})
         risk=[]
-        for path in sorted((store.root/'models').glob('model-*/manifest.json')):
+        for path in (sorted((store.root/'models').glob('model-*/manifest.json')) if include_models else []):
             try:
                 artifact=models.read(path.parent.name)
                 risk.append({'model_id':path.parent.name,'dataset_id':artifact['training_manifest.json']['dataset_id'],
@@ -501,7 +505,7 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
                 errors.append({'artifact':path.parent.name,'message':str(exc)})
         timing=[]
         from t1fx.timing import load_model
-        for path in sorted((store.root/'timing_models').glob('timing-*.json')):
+        for path in (sorted((store.root/'timing_models').glob('timing-*.json')) if include_models else []):
             try:
                 model,metrics=load_model(store.root,path.stem)
                 timing.append({'model_id':path.stem,'dataset_id':model.dataset_id,'metrics':metrics})
@@ -511,16 +515,21 @@ def create_app(artifact_root: Path | None = None) -> FastAPI:
         return {'datasets':datasets,'risk_models':risk,'timing_models':timing,'errors':errors,
                 'experiments':[{'experiment_id':m['run_id']} for m in records]}
 
+    @app.post('/api/v1/workflow/model-choices')
+    def workflow_model_choices(body: ModelChoicesRequest, request: Request):
+        require_local_origin(request)
+        return model_choices(store.root, body)
+
     @app.post('/api/v1/workflow/eligibility')
     def workflow_eligibility(body:WorkflowRequest,request:Request):
         require_local_origin(request)
-        return compatibility(store.root,body)
+        return compatibility(store.root,body, today=generation_today(body))
 
     @app.post('/api/v1/workflow/jobs',status_code=202)
     def workflow_submit(body:WorkflowRequest,request:Request,
                         idempotency_key:str=Header(min_length=1,max_length=128)):
         require_local_origin(request)
-        check=compatibility(store.root,body)
+        check=compatibility(store.root,body, today=generation_today(body))
         if not check['eligible']:
             return JSONResponse(status_code=422,content={'code':'INELIGIBLE','message':'; '.join(check['reasons']),'reasons':check['reasons']})
         return jobs.submit(None,body,idempotency_key)

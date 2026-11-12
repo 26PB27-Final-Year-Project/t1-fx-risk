@@ -46,6 +46,9 @@ def test_real_training_preparation_export_and_compatibility(prepared):
     root,out=prepared;client=TestClient(create_app(root))
     catalog=client.get('/api/v1/workflow/catalog').json()
     assert len(catalog['datasets'])==1 and catalog['risk_models'] and catalog['timing_models']
+    datasets_only=client.get('/api/v1/workflow/catalog?include_models=false').json()
+    assert datasets_only['datasets']==catalog['datasets']
+    assert datasets_only['risk_models']==[] and datasets_only['timing_models']==[]
     scenarios=catalog['datasets'][0]['scenarios']
     request=WorkflowRequest(kind='compare',dataset_id=out['dataset_id'],scenario_id=scenarios[0]['scenario_id'],risk_model_id=out['risk_model_id'],timing_model_id=out['timing_model_id'])
     assert compatibility(root,request)['eligible']
@@ -219,3 +222,129 @@ def test_prepare_replaces_old_model_selections(prepared):
     assert compatibility(root, request)['eligible']
     compare = request.model_copy(update={'kind':'compare', 'scenario_id':'invalid'})
     assert not compatibility(root, compare)['eligible']
+
+
+def test_generation_accepts_exact_mature_horizon_and_preview_matches_output():
+    from datetime import date, timedelta
+    from t1fx.workflow import generation_preview, generation_config
+    from t1fx.generation import generate_dataset
+    request=WorkflowRequest(kind='generate',start_date=date(2026,9,1),trade_count=83,trading_days=4)
+    initial=generation_preview(request,today=date(2026,12,1))
+    last=date.fromisoformat(initial['schedule'][-1]['labels_mature_at'][:10])
+    preview=generation_preview(request,today=last+timedelta(days=1))
+    with pytest.raises(ValueError,match='earlier start'):
+        generation_config(request,today=last)
+    generated=list(generate_dataset(generation_config(request,today=last+timedelta(days=1))))
+    assert sum(row['trade_count'] for row in preview['schedule'])==83
+    for row,day in zip(preview['schedule'],generated,strict=True):
+        assert row['decision_at']==day.scenario.decision_at.isoformat()
+        assert row['labels_mature_at']==day.scenario.ends_at.isoformat()
+        assert row['deadline_at']==day.scenario.trades[0].contractual_deadline_at.isoformat()
+        assert row['trade_count']==len(day.scenario.trades)
+
+
+def test_preview_implicit_dates_follow_online_clock(tmp_path,monkeypatch):
+    from datetime import date
+    from t1fx.workflow import recommended_start
+    monkeypatch.setattr('t1fx.api.online_time',lambda:{'utc_now':'2026-09-15T12:00:00+00:00','source':'test://clock'})
+    client=TestClient(create_app(tmp_path))
+    response=client.post('/api/v1/workflow/preview',json={'kind':'generate','trade_count':80,'trading_days':4})
+    assert response.status_code==200,response.text
+    assert response.json()['configuration']['start_date']==recommended_start(date(2026,9,15),4).isoformat()
+    assert response.json()['schedule'][-1]['labels_mature_at']<'2026-09-15'
+
+
+def test_catalog_skips_table_decoding_but_detects_changed_bytes(prepared, monkeypatch):
+    import t1fx.workflow as workflow
+    root, out = prepared
+    monkeypatch.setattr(workflow, 'validate_dataset', Mock(side_effect=AssertionError('Catalog must not decode all tables')))
+    entry = workflow.dataset_catalog_entry(root, out['dataset_id'])
+    assert entry['summary']['trade_count'] == 1000
+    path = root/'datasets'/out['dataset_id']/'resolved_config.json'
+    original = path.read_bytes()
+    try:
+        path.write_bytes(original + b' ')
+        with pytest.raises(ValueError, match='checksum'):
+            workflow.dataset_catalog_entry(root, out['dataset_id'])
+    finally:
+        path.write_bytes(original)
+
+
+def test_batched_model_checks_share_validation_and_replay(prepared, monkeypatch):
+    import t1fx.workflow as workflow
+    import t1fx.simulator as simulator
+    root, out = prepared
+    scenario_id = workflow.dataset_catalog_entry(root, out['dataset_id'])['scenarios'][0]['scenario_id']
+    body = dict(kind='compare', dataset_id=out['dataset_id'], scenario_id=scenario_id,
+                risk_model_ids=[out['risk_model_id'], out['risk_model_id']],
+                timing_model_ids=[out['timing_model_id']])
+    read = Mock(wraps=workflow.dataset_scenarios)
+    replay = Mock(wraps=simulator.simulate)
+    monkeypatch.setattr(workflow, 'dataset_scenarios', read)
+    monkeypatch.setattr(simulator, 'simulate', replay)
+    client = TestClient(create_app(root))
+    response = client.post('/api/v1/workflow/model-choices', json=body)
+    assert response.status_code == 200, response.text
+    assert response.json() == {out['risk_model_id']: [], out['timing_model_id']: []}
+    assert read.call_count == 1
+    assert replay.call_count == 1
+    body['scenario_id'] = 'not-held-out'
+    invalid = client.post('/api/v1/workflow/model-choices', json=body).json()
+    assert all('held-out' in reasons[0] for reasons in invalid.values())
+    body['risk_model_ids'] = ['../../outside']
+    assert client.post('/api/v1/workflow/model-choices', json=body).status_code == 422
+
+
+def test_existing_dataset_operations_do_not_resolve_generation_dates(prepared, monkeypatch):
+    import t1fx.workflow as workflow
+    root, out = prepared
+    monkeypatch.setattr(workflow, 'recommended_start', Mock(side_effect=AssertionError('No generation dates for existing datasets')))
+    monkeypatch.setattr(workflow, 'online_time', Mock(side_effect=AssertionError('No generation clock for existing datasets')))
+    request = WorkflowRequest(kind='train-timing', dataset_id=out['dataset_id'])
+    assert request.start_date is None
+    result = workflow.execute_job(root, request.model_dump(mode='json'), {'outputs': out}, lambda *_: None)
+    assert result['outputs']['timing_model_id'] == out['timing_model_id']
+    # A failed generation job with a completed dataset also resumes without a new calendar.
+    result = workflow.execute_job(root, WorkflowRequest(kind='generate').model_dump(mode='json'),
+                                  {'outputs': {'dataset_id': out['dataset_id']}}, lambda *_: None)
+    assert result['outputs']['dataset_id'] == out['dataset_id']
+
+
+def test_generation_submission_and_worker_use_online_clock_with_wrong_host_clock(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+    import t1fx.workflow as workflow
+    clock = lambda: {'utc_now': '2026-09-15T12:00:00+00:00', 'source': 'test://clock'}
+    class WrongHostClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2000, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(workflow, 'datetime', WrongHostClock)
+    monkeypatch.setattr(workflow, 'online_time', clock)
+    monkeypatch.setattr('t1fx.api.online_time', clock)
+    client = TestClient(create_app(tmp_path))
+    response = client.post('/api/v1/workflow/jobs', json={'kind':'generate','trade_count':80,'trading_days':4},
+                           headers={'Idempotency-Key':'wrong-host-clock'})
+    assert response.status_code == 202, response.text
+    submitted = response.json()
+    assert submitted['request']['start_date'].startswith('2026-')
+    assert work_once(tmp_path)
+    job = JobStore(tmp_path).get(submitted['job_id'])
+    assert job['status'] == 'SUCCEEDED', job
+    config = json.loads((tmp_path/'datasets'/job['result']['outputs']['dataset_id']/'resolved_config.json').read_text())
+    assert config['start_date'] == submitted['request']['start_date']
+
+
+def test_comparison_checks_tables_once_but_rechecks_bytes(prepared, monkeypatch):
+    import t1fx.datasets as datasets
+    import t1fx.workflow as workflow
+    root, out = prepared
+    record = json.loads(export_record(root, out['experiment_id'], 'json'))
+    datasets._VALIDATED.clear()
+    semantic = Mock(wraps=datasets.validate_tables)
+    hashes = Mock(wraps=datasets._hash_file)
+    monkeypatch.setattr(datasets, 'validate_tables', semantic)
+    monkeypatch.setattr(datasets, '_hash_file', hashes)
+    payload = record['configuration'] | {'kind': 'compare'}
+    workflow.execute_job(root, payload, {'outputs':out}, lambda *_: None)
+    assert semantic.call_count == 1
+    assert hashes.call_count > len(record['dataset_manifest']['files'])

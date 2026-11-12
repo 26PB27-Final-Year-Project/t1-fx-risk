@@ -140,3 +140,15 @@
 }
 .budget-panel>form>[data-slot="button"] { grid-column: 1 / -1; justify-self: end; min-width: 180px; }
 @media(max-width:767px) { .budget-panel>form>[data-slot="button"] { width: 100%; min-width: 0; } }
+
+/* Native disclosure remains keyboard accessible, with a quiet opening motion. */
+.reading-guide details[open] .guide-content {
+  animation: guide-reveal 200ms ease-out;
+}
+@keyframes guide-reveal {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reading-guide details[open] .guide-content { animation: none; }
+}

@@ -6,7 +6,7 @@ test('trade inspection, funding job, reload recovery, scenarios, and model empty
   await page.goto('/');
   await expect(page.getByRole('heading', {name: 'Trade watchlist'})).toBeVisible();
   await page.getByText('How to read this page', {exact: true}).click();
-  await expect(page.getByText('The model’s estimated chance', {exact: false})).toBeVisible();
+  await expect(page.getByText('Failure probability assumes no extra reserve', {exact: false})).toBeVisible();
   await page.getByText('How to read this page', {exact: true}).click();
   await expect(page.getByRole('columnheader', {name: 'Rule score', exact: true})).toHaveCount(0);
   await expect(page.getByRole('combobox', {name: 'Minimum rule score', exact: true})).toHaveCount(0);
@@ -28,9 +28,9 @@ test('trade inspection, funding job, reload recovery, scenarios, and model empty
   await page.getByRole('button', {name: 'Open recomputed plan'}).click();
   await expect(page.getByLabel('Liquidity limit (USD)')).toHaveValue('15000.00');
   await page.getByRole('button', {name: 'Scenarios', exact: true}).click();
-  await expect(page.getByRole('heading', {name: 'Matched policy comparison'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Compare funding policies',exact:true})).toBeVisible();
   await expect(page.locator('tbody tr')).toHaveCount(4);
-  await expect(page.locator('tbody')).toContainText('15000.00');
+  await expect(page.locator('tbody')).toContainText('USD 15,000');
   await page.getByRole('button', {name: 'Model health', exact: true}).click();
   await expect(page.getByText('No model selected.', {exact: false})).toBeVisible();
   expect(errors).toEqual([]);
@@ -41,7 +41,7 @@ test('structured API errors surface and the dashboard recovers', async ({ page }
   await page.goto('/');
   await expect(page.getByRole('alert')).toContainText('Artifacts temporarily unavailable');
   await page.unroute('**/api/v1/runs');
-  await page.getByRole('button', {name: 'Refresh runs'}).click();
+  await page.getByRole('button', {name: 'Refresh saved runs'}).click();
   await expect(page.getByRole('button', {name: 'T-FX-GAP', exact: true})).toBeVisible();
 });
 
@@ -442,11 +442,14 @@ test('task-first pages offer next actions and keep research details optional', a
       if(tab==='Experiments') {
         await expect(page.getByRole('navigation',{name:'Experiment steps'})).toBeVisible();
         await expect(page.getByLabel('Opening cash fraction',{exact:true})).toBeHidden();
-        await page.getByText('Dataset assumptions · optional',{exact:true}).click();
+        await page.getByText('Dataset assumptions',{exact:true}).click();
         await expect(page.getByLabel('Opening cash fraction',{exact:true})).toBeVisible();
       } else {
         await expect(page.getByRole('region',{name:'Next step'})).toBeVisible();
         await expect(page.getByRole('region',{name:'Evaluation controls'})).toHaveCount(tab==='Trades'?1:0);
+      }
+      if(tab==='Scenarios') {
+        await expect(page.getByRole('region',{name:'Missed deadlines by policy'})).toBeVisible();
       }
       if(tab==='Funding') {
         await expect(page.getByLabel('Liquidity limit (USD)')).toBeEnabled();
@@ -464,7 +467,7 @@ test('current-date defaults and header actions fit mobile and desktop pages', as
   await page.goto('/?tab=Experiments');
   const defaults = await (await page.request.get('/api/v1/workflow/defaults')).json();
   await expect(page.getByLabel('First trading date',{exact:true})).toHaveValue(defaults.start_date);
-  await expect(page.getByText('Current UTC date:',{exact:false})).toContainText(defaults.today);
+  await expect(page.getByLabel('First trading date',{exact:true})).toHaveAttribute('max',defaults.today);
   for (const width of [320,390,768,1440]) {
     await page.setViewportSize({width,height:900});
     for (const tab of ['Experiments','Trades','Funding','Scenarios','Model health']) {
@@ -617,4 +620,145 @@ test('trade rows load while model forecasts are pending',async({page})=>{
     await expect(page.getByText('Loading prediction…').first()).toBeVisible();
     expect(calls).toBe(1);
   } finally {release();}
+});
+
+test('timing health hides empty bins and explains single-class evidence', async ({page}) => {
+  await page.route('**/api/v1/models',route=>route.fulfill({json:{items:[]}}));
+  await page.route('**/api/v1/timing-models',route=>route.fulfill({json:{items:[{model_id:'timing-test'}]}}));
+  await page.route('**/api/v1/timing-models/*/health',route=>route.fulfill({json:{timing_model_id:'timing-test',metrics:{count:660,brier_score:0,reliability_bins:Array.from({length:10},(_,i)=>({lower:i/10,upper:(i+1)/10,count:i===9?660:0,mean_probability:i===9?1:null,late_frequency:i===9?1:null}))}}}));
+  await page.goto('/');
+  await page.getByRole('button',{name:'Model health',exact:true}).click();
+  await expect(page.getByText('All 660 evaluated observations',{exact:false})).toBeVisible();
+  await expect(page.getByRole('columnheader',{name:'ROC AUC',exact:false})).toHaveCount(0);
+  await expect(page.getByText('Only one probability range contains observations',{exact:false})).toBeVisible();
+  await page.getByText('Calibration data (1 populated ranges)',{exact:true}).click();
+  await expect(page.getByRole('cell',{name:'0.9–1',exact:true})).toBeVisible();
+  await expect(page.getByRole('cell',{name:'0–0.1',exact:true})).toHaveCount(0);
+});
+
+test('funding allocation amounts trim raw decimal padding',async({page})=>{
+  await page.route('**/api/v1/runs/*/funding',async route=>{
+    const response=await route.fetch();const data=await response.json();
+    data.plan.allocations[0].observed_pool_cash='130525.060000';
+    data.plan.allocations[0].incremental_reserve='2762.410000';
+    data.plan.allocations[0].expected_shortfall='5970.800000000000000000000';
+    await route.fulfill({json:data});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Funding',exact:true}).click();
+  const table=page.locator('.allocation-table');
+  await expect(table.getByRole('cell',{name:'130,525.06',exact:true})).toBeVisible();
+  await expect(table.getByRole('cell',{name:'2,762.41',exact:true})).toBeVisible();
+  await expect(table.getByRole('cell',{name:'5,970.8',exact:true})).toBeVisible();
+  await expect(table).not.toContainText('800000');
+});
+
+test('missing saved funding jobs recover without permanently disabling recompute',async({page})=>{
+  const runs=await (await page.request.get('/api/v1/runs')).json();
+  const run=runs.items.find(r=>r.scenario_id==='three-trades-v1');
+  await page.addInitScript(id=>localStorage.setItem('t1fx-job:'+id,'deleted-funding-job'),run.run_id);
+  await page.goto('/?tab=Funding&run='+run.run_id);
+  await expect(page.getByText('The previous funding job is no longer available.',{exact:false})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Recompute funding',exact:true})).toBeEnabled();
+});
+
+test('evaluation job tracking survives refresh and clears missing jobs',async({page})=>{
+  const runs=await (await page.request.get('/api/v1/runs')).json();
+  const run=runs.items.find(r=>r.scenario_id==='three-trades-v1');
+  await page.addInitScript(id=>localStorage.setItem('evaluation-job:'+id,'resume-evaluation'),run.run_id);
+  let missing=false;
+  await page.route('**/api/v1/jobs/resume-evaluation',route=>route.fulfill({status:missing?404:200,json:missing?{message:'Job not found'}:{status:'RUNNING'}}));
+  await page.goto('/?tab=Trades&run='+run.run_id);
+  await expect(page.getByRole('button',{name:'Evaluating…',exact:true})).toBeDisabled();
+  await page.reload();
+  await expect(page.getByRole('button',{name:'Evaluating…',exact:true})).toBeDisabled();
+  missing=true;
+  await expect(page.getByText('The previous evaluation job is no longer available.',{exact:false})).toBeVisible({timeout:10000});
+  await expect(page.getByRole('button',{name:'Apply evaluation',exact:true})).toBeEnabled();
+});
+
+test('failed run loading remains visible on Experiments and offers retry',async({page})=>{
+  await page.route('**/api/v1/runs',route=>route.fulfill({status:503,json:{message:'Saved runs temporarily unavailable'}}));
+  await page.goto('/?tab=Experiments');
+  await expect(page.getByRole('alert')).toContainText('Saved runs temporarily unavailable');
+  await page.unroute('**/api/v1/runs');
+  await page.getByRole('button',{name:'Retry loading saved runs'}).click();
+  await expect(page.getByRole('button',{name:'Retry loading saved runs'})).toHaveCount(0);
+});
+
+test('experiment hides temporally incompatible models and clears stale selections',async({page})=>{
+  const datasetId='dataset-'+'e'.repeat(20),bad='model-'+'f'.repeat(20),good='model-'+'a'.repeat(20);
+  const partition={trade_count:25,first_execution_at:'2026-07-06T12:00:00Z',last_label_known_at:'2026-07-07T12:00:00Z'};
+  const dataset={dataset_id:datasetId,name:'Held-out dataset',configuration:{},outcome_balance:{},summary:{trade_count:100,failed_count:10,partitions:Object.fromEntries(['train','tuning','calibration','test'].map(k=>[k,partition]))},scenarios:[{scenario_id:'test-day',name:'Test day',decision_at:'2026-07-10T12:00:00Z'}]};
+  await page.addInitScript(data=>localStorage.setItem('experiment-draft',JSON.stringify(data)),{dataset_id:datasetId,scenario_id:'test-day',risk_model_id:bad});
+  await page.route('**/api/v1/workflow/catalog',route=>route.fulfill({json:{datasets:[dataset],risk_models:[bad,good].map(model_id=>({model_id,dataset_id:datasetId,metrics:{}})),timing_models:[],experiments:[],errors:[]}}));
+  await page.route('**/api/v1/workflow/eligibility',route=>{const invalid=route.request().postDataJSON().risk_model_id===bad;return route.fulfill({json:{eligible:!invalid,reasons:invalid?['Inference must occur after calibration labels matured']:[]}});});
+  let choiceRequests=0;
+  await page.route('**/api/v1/workflow/model-choices',route=>{choiceRequests++;expect(route.request().postDataJSON().risk_model_ids).toEqual([bad,good]);return route.fulfill({json:{[bad]:['Inference must occur after calibration labels matured'],[good]:[]}});});
+  await page.goto('/?tab=Experiments');
+  await expect(page.getByText('The previous model selection cannot evaluate this test day',{exact:false})).toBeVisible();
+  const picker=page.getByRole('combobox',{name:'Risk prediction model',exact:true});
+  await expect(picker).toContainText('No risk model');
+  await expect(page.getByText('Inference must occur after calibration labels matured',{exact:true})).toBeHidden();
+  await picker.click();
+  await expect(page.getByRole('option',{name:'Risk model 1 · ffffff',exact:true})).toHaveCount(0);
+  await page.getByRole('option',{name:'Risk model 2 · aaaaaa',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Compare funding policies',exact:true})).toBeEnabled();
+  await page.getByText('Why some models are hidden',{exact:true}).click();
+  await expect(page.getByText('Inference must occur after calibration labels matured',{exact:true})).toBeVisible();
+  expect(choiceRequests).toBe(1);
+});
+
+test('evaluation minute precision respects subminute saved boundaries',async({page})=>{
+  await page.route('**/api/v1/time',route=>route.fulfill({json:{utc_now:'2026-10-15T12:00:00Z',source:'test://clock'}}));
+  await page.route('**/api/v1/runs/*/evaluation-context',async route=>{
+    const response=await route.fetch();const body=await response.json();
+    await route.fulfill({json:{...body,starts_at:'2026-10-14T12:00:30Z',ends_at:'2026-10-14T12:02:00.500Z'}});
+  });
+  const runs=await (await page.request.get('/api/v1/runs')).json();
+  const run=runs.items.find(r=>r.scenario_id==='three-trades-v1');
+  await page.goto('/?run='+run.run_id);
+  await expect(page.getByText(/Available:/)).toContainText('12:01');
+  const input=page.getByLabel('Evaluation local time',{exact:true}),apply=page.getByRole('button',{name:'Apply evaluation',exact:true});
+  await input.fill('12:00');await expect(apply).toBeDisabled();
+  await input.fill('12:01');await expect(apply).toBeEnabled();
+  await input.fill('12:02');await expect(apply).toBeEnabled();
+  await input.fill('12:03');await expect(apply).toBeDisabled();
+});
+
+test('dataset catalog failure can be retried without refreshing the page',async({page})=>{
+  let fail=true;
+  await page.route('**/api/v1/workflow/catalog',route=>fail?route.fulfill({status:503,json:{message:'Temporary outage'}}):route.fulfill({json:{datasets:[],risk_models:[],timing_models:[],experiments:[],errors:[]}}));
+  await page.goto('/?tab=Experiments');
+  await expect(page.getByRole('alert')).toContainText('Could not load saved datasets');
+  fail=false;
+  await page.getByRole('button',{name:'Retry loading datasets',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Retry loading datasets',exact:true})).toHaveCount(0);
+});
+
+test('model checks batch large catalogs and recover from incomplete responses',async({page},testInfo)=>{
+  const id='dataset-'+'e'.repeat(20);
+  const models=Array.from({length:101},(_,i)=>({model_id:'model-'+i.toString(16).padStart(20,'0'),dataset_id:id,metrics:{}}));
+  const dataset={dataset_id:id,name:'Saved research dataset',configuration:{},outcome_balance:{},summary:{trade_count:1000,failed_count:10,partitions:Object.fromEntries(['train','tuning','calibration','test'].map(k=>[k,{trade_count:250,first_execution_at:'2026-07-06T12:00:00Z',last_label_known_at:'2026-07-07T12:00:00Z'}]))},scenarios:[{scenario_id:'held-out',name:'Test day',decision_at:'2026-07-10T12:00:00Z'}]};
+  await page.addInitScript(id=>localStorage.setItem('experiment-draft',JSON.stringify({dataset_id:id,scenario_id:'held-out'})),id);
+  await page.route('**/api/v1/workflow/catalog',route=>route.fulfill({json:{datasets:[dataset],risk_models:models,timing_models:[],experiments:[],errors:[]}}));
+  await page.route('**/api/v1/workflow/eligibility',route=>route.fulfill({json:{eligible:true,reasons:[]}}));
+  let incomplete=true;const sizes=[];
+  await page.route('**/api/v1/workflow/model-choices',route=>{
+    const ids=route.request().postDataJSON().risk_model_ids;sizes.push(ids.length);
+    return route.fulfill({json:incomplete?{}:Object.fromEntries(ids.map(id=>[id,[]]))});
+  });
+  await page.goto('/?tab=Experiments');
+  await expect(page.getByText('Could not check model compatibility.',{exact:false})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Compare funding policies',exact:true})).toBeDisabled();
+  await expect(page.getByRole('combobox',{name:'Risk prediction model',exact:true})).toBeDisabled();
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'Retry model checks',exact:true}).scrollIntoViewIfNeeded();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('model-check-retry-mobile.png')});
+  incomplete=false;
+  await page.getByRole('button',{name:'Retry model checks',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Compare funding policies',exact:true})).toBeEnabled();
+  expect(sizes).toEqual([100,100,1]);
+  await expect(page.getByRole('button',{name:'Retry model checks',exact:true})).toHaveCount(0);
 });
